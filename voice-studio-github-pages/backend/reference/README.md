@@ -1,0 +1,1 @@
+Place your own WAV recording here as reference.wav. Edit reference.txt to match exactly. Never commit private recordings to Git. Restart the API to import changes, or call POST /api/admin/reload-reference with ADMIN_TOKEN.
