@@ -71,3 +71,17 @@ The shell or process manager must load variables; `.env` is documentation rather
 ## Status and troubleshooting
 
 `GET /api/models` reports readiness only when the corresponding worker is running and its engine loaded. If the worker is offline, UI shows unavailable. There is no synthetic audio fallback. If generating fails, inspect the separate model worker's terminal. Actual inference depends on compatible checkpoints, model licenses and GPU memory. The three integrations have **not** been executed against your own GPUs in this environment.
+
+## Frontend verification
+
+Run the same TypeScript and production-build checks used by GitHub Actions:
+
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+The `src/vite-env.d.ts` declaration enables TypeScript to recognize `import.meta.env`. The GitHub Pages deployment also depends on repository Pages settings and a reachable HTTPS backend. A successful static build **does not** establish that speech-generation workers or authentication are production-ready.
+
+**Security boundary:** `VITE_API_URL` is embedded in browser code, so never use it to store secrets. Configure secrets only in the backend environment. Avoid publicly exposing this API until authentication, authorization and rate limiting have been independently tested.
