@@ -1,6 +1,6 @@
 # Voice Comparison Studio
 
-Compare Qwen3-TTS, CosyVoice 3 and XTTS-v2 against one server-managed reference voice. The React frontend plays actual recordings; FastAPI schedules synthesis and stores measured results in SQLite. The original voice has audio and a transcript, without generated scores.
+Compare Qwen3-TTS, CosyVoice 3 and XTTS-v2 against one server-managed reference voice. The React frontend plays actual recordings; FastAPI schedules synthesis and stores measured results in SQLite. The original voice panel contains only audio. The reference transcript stays on the server for synthesis.
 
 Available models run **simultaneously**. Each model serializes its own requests; there is no global GPU lock, performance mode, generated placeholder audio or silent substitution of one model for another. Use sufficient GPU memory for concurrent models, or put individual workers on different GPUs. Running concurrently does not guarantee faster inference on a saturated GPU.
 
@@ -30,7 +30,7 @@ The API starts without model packages. Generation stays unavailable until at lea
 
 The supplied recording and transcript are in `backend/reference/reference.wav` and `reference.txt`. Replace both together with your reference recording and its exact transcript, then restart. The recording must be a PCM WAV lasting 0.25–120 seconds. Use an absolute `REFERENCE_DIR` for a separately managed reference directory. The app imports it into persistent storage and keeps its ID stable when unchanged.
 
-Only administrators can reload the reference through `POST /api/admin/reload-reference`, with `Authorization: Bearer <ADMIN_TOKEN>`. Public upload and transcript-edit routes have been removed. The browser can listen to the original recording and read its transcript, so these are not secret from authorized users.
+Only administrators can reload the reference through `POST /api/admin/reload-reference`, with `Authorization: Bearer <ADMIN_TOKEN>`. Public upload and transcript-edit routes have been removed. The browser can listen to the original recording. The reference transcript is not returned by the reference-profile endpoint or displayed in the interface.
 
 To preserve previous recordings, copy your **entire** existing `backend/data/` directory before first startup. Do not overwrite or delete the existing database. Startup repairs missing absolute paths when the same filenames exist in the new data/audio directory, and marks interrupted jobs failed so the UI does not poll forever. Keep one API process (`--workers 1`) because job ownership is in process memory.
 

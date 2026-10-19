@@ -14,6 +14,7 @@ def test_health_reference_models():
         profile = api.get("/api/reference-profile")
         assert profile.status_code == 200
         assert profile.json()["reference"] is not None
+        assert "transcript" not in profile.json()
         models = api.get("/api/models")
         assert models.status_code == 200
         assert len(models.json()) == 3

@@ -213,7 +213,7 @@ def get_reference_profile():
             "SELECT reference_id,transcript FROM reference_profiles WHERE id=1"
         ).fetchone()
         if not row:
-            return {"reference": None, "transcript": ""}
+            return {"reference": None}
         ref = c.execute(
             "SELECT id,filename,path FROM references_audio WHERE id=?",
             (row["reference_id"],),
@@ -222,7 +222,6 @@ def get_reference_profile():
         "reference": {"id": ref["id"], "filename": ref["filename"]}
         if ref and Path(ref["path"]).exists()
         else None,
-        "transcript": row["transcript"],
     }
 
 

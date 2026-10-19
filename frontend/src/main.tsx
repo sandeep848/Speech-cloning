@@ -35,7 +35,6 @@ function App() {
   const [models,setModels]=useState<Model[]>(defaults);
   const [active,setActive]=useState<string[]>(savedActive);
   const [reference,setReference]=useState<{id:string;filename:string}|null>(null);
-  const [referenceText,setReferenceText]=useState('');
   const [text,setText]=useState('');
   const [batchId,setBatchId]=useState(()=>localStorage.getItem('voice.batch') || '');
   const [jobs,setJobs]=useState<Job[]>([]);
@@ -61,7 +60,7 @@ function App() {
       try {
         const [profile,available]=await Promise.all([req('/api/reference-profile'),req('/api/models')]);
         if(cancelled)return;
-        setReference(profile.reference);setReferenceText(profile.transcript);setModels(available);
+        setReference(profile.reference);setModels(available);
       } catch(error) {if(!cancelled)setNotice(String(error))}
     };
     load();const timer=window.setInterval(load,15000);
@@ -145,7 +144,7 @@ function App() {
       <div className="heading"><div><h1>Compare voices</h1><p>Selected available models generate simultaneously.</p></div><button className="primary" onClick={generate} disabled={busy || loginRequired || !reference || !text.trim() || !eligible.length}>{busy?'Generating…':'Generate'}</button></div>
       <label className="input-label" htmlFor="speech">Text to generate</label><textarea id="speech" value={text} onChange={e=>setText(e.target.value)} maxLength={2000} placeholder="Enter the speech you want all models to generate."/>
       <div className="grid" onDragOver={e=>e.preventDefault()} onDrop={()=>drop('comparison')}>
-        <article className="voice-card reference"><header><strong>Original voice</strong><span className="quiet">Server reference</span></header>{reference?<Audio path={'/api/references/'+reference.id+'/audio'}/>:<p>Place reference.wav and reference.txt in backend/reference/, then restart the server.</p>}<p className="reference-transcript">{referenceText}</p></article>
+        <article className="voice-card reference"><header><strong>Original voice</strong><span className="quiet">Server reference</span></header>{reference?<Audio path={'/api/references/'+reference.id+'/audio'}/>:<p>Place reference.wav and reference.txt in backend/reference/, then restart the server.</p>}</article>
         {active.map(card)}{!active.length && <div className="empty-workspace">Add a model from the library.</div>}
       </div>
     </>:<>
