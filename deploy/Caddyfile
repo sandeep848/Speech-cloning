@@ -1,0 +1,9 @@
+# Replace with your domain; Caddy terminates HTTPS and proxies the complete app.
+voice.example.com {
+    reverse_proxy 127.0.0.1:8000
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy same-origin
+        X-Frame-Options DENY
+    }
+}

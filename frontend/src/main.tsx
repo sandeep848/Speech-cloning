@@ -1,28 +1,160 @@
-import React, {useEffect,useState,useRef} from 'react';import{createRoot}from'react-dom/client';import './style.css';
-const API=(import.meta.env.VITE_API_URL||'').replace(/\/$/,'');
-type Model={id:string;name:string;ready:boolean;configured:boolean};type Job={id:string;model_id:string;status:string;error?:string;audio_url?:string};
-const defaultModels:Model[]=[{id:'qwen3',name:'Qwen3-TTS',ready:false,configured:false},{id:'cosyvoice3',name:'CosyVoice 3',ready:false,configured:false},{id:'xtts-v2',name:'XTTS-v2',ready:false,configured:false}];
-async function req(path:string,opts?:RequestInit){
-  const r=await fetch(API+path,opts);
-  if(!r.ok){let detail='';try{const body=await r.json();detail=typeof body.detail==='string'?body.detail:JSON.stringify(body.detail||body)}catch{detail=await r.text().catch(()=>r.statusText)}
-    const error=new Error(detail||`Request failed (${r.status})`) as Error & {status?:number};error.status=r.status;throw error;
+import React, {useEffect, useRef, useState} from 'react';
+import {createRoot} from 'react-dom/client';
+import './style.css';
+
+const API = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+type Model = {id:string; name:string; ready:boolean; configured:boolean; loaded?:boolean; detail?:string};
+type Job = {id:string; model_id:string; status:string; error?:string; audio_url?:string; runtime_seconds?:number|null};
+type Evaluation = {status:string; error?:string; errors?:{name:string; reason:string}[]; metrics:{name:string; value:number}[]};
+const defaults:Model[] = ['qwen3','cosyvoice3','xtts-v2'].map((id,i)=>({id,name:['Qwen3-TTS','CosyVoice 3','XTTS-v2'][i],ready:false,configured:false}));
+const labels:Record<string,string> = {wer:'Word error rate',cer:'Character error rate',duration_s:'Audio duration',latency_s:'Generation time',rtf:'Real-time factor',ecapa_similarity:'Speaker similarity',scoreq:'ScoreQ quality'};
+
+async function req(path:string, options:RequestInit = {}) {
+  const response = await fetch(API+path, {...options,credentials:'include'});
+  const body = await response.json().catch(()=>({detail:response.statusText}));
+  if (!response.ok) {
+    if (response.status===401 && path!=='/api/session') window.dispatchEvent(new Event('studio-login'));
+    const error = new Error(typeof body.detail==='string' ? body.detail : JSON.stringify(body.detail)) as Error & {status:number};
+    error.status=response.status; throw error;
   }
-  return r.json();
+  return body;
 }
-function App(){const [tab,setTab]=useState('Compare'),[models,setModels]=useState<Model[]>(defaultModels),[active,setActive]=useState<string[]>(()=>{try{return JSON.parse(localStorage.getItem('voice.active')||'["qwen3","cosyvoice3","xtts-v2"]')}catch{return ['qwen3','cosyvoice3','xtts-v2']}}),[reference,setReference]=useState<{id:string;filename:string}|null>(null),[text,setText]=useState(''),[referenceText,setReferenceText]=useState(''),[profileReady,setProfileReady]=useState(false),[savingTranscript,setSavingTranscript]=useState(false),[batchId,setBatchId]=useState(''),[jobs,setJobs]=useState<Job[]>([]),[history,setHistory]=useState<{id:string;text:string;created:number}[]>([]),[notice,setNotice]=useState(''),[uploading,setUploading]=useState(false),[busy,setBusy]=useState(false),[metrics,setMetrics]=useState<Record<string,any>>({});const dragged=useRef('');const [batchTexts,setBatchTexts]=useState(''),[repeats,setRepeats]=useState(1),[batchNotice,setBatchNotice]=useState(''),[rating,setRating]=useState(5),[rater,setRater]=useState('');
-useEffect(()=>{localStorage.setItem('voice.active',JSON.stringify(active));req('/api/workspace',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({active})}).catch(()=>{})},[active]);useEffect(()=>{req('/api/reference-profile').then(p=>{setReference(p.reference||null);setReferenceText(p.transcript||'');localStorage.removeItem('voice.reference');setProfileReady(true)}).catch(()=>{setProfileReady(true);setNotice('Could not retrieve the saved reference from the backend.')})},[]);useEffect(()=>{req('/api/models').then(setModels).catch(()=>setNotice('Backend unavailable. Generation requires a connected inference server.'))},[]);
-useEffect(()=>{const saved=localStorage.getItem('voice.batch');if(saved)setBatchId(saved)},[]);
-useEffect(()=>{if(batchId)localStorage.setItem('voice.batch',batchId);else localStorage.removeItem('voice.batch')},[batchId]);useEffect(()=>{if(!batchId)return;let cancelled=false;let timer:number;const tick=async()=>{try{const b=await req('/api/generations/'+batchId);if(cancelled)return;setJobs(b.jobs);const ongoing=b.jobs.some((j:Job)=>['pending','running'].includes(j.status));setBusy(ongoing);if(ongoing)timer=window.setTimeout(tick,1500)}catch(e){if(cancelled)return;
-    if((e as Error & {status?:number}).status===404){
-      setBatchId('');setJobs([]);setBusy(false);localStorage.removeItem('voice.batch');
-      setNotice('The previous generation is no longer available. Your saved reference remains unchanged.');
-    }else{setNotice(String(e));timer=window.setTimeout(tick,4000)}
-  }};tick();return()=>{cancelled=true;clearTimeout(timer)}},[batchId]);
-async function generate(){if(!reference){setNotice('Upload the original reference audio first.');return}if(!text.trim()){setNotice('Enter the speech text.');return}if(!active.length){setNotice('Add a model to comparison.');return}setNotice('');try{const result=await req('/api/generations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,models:active})});setJobs(result.jobs);setBusy(true);setBatchId(result.id)}catch(e){setNotice(String(e))}}
-async function showMetrics(){setTab('Metrics');const results=await Promise.all(jobs.map(async j=>{if(j.status==='complete')await req('/api/evaluations/'+j.id,{method:'POST'}).catch(()=>{});return req('/api/evaluations/'+j.id).catch(()=>({metrics:[],status:'unavailable',job_id:j.id}))}));setMetrics(Object.fromEntries(results.map((r,i)=>[jobs[i].model_id,r])))}
-async function showHistory(){setTab('Experiments');try{setHistory(await req('/api/experiments'))}catch(e){setNotice(String(e))}}
-function move(id:string,target:'library'|'comparison'){setActive(a=>target==='library'?a.filter(x=>x!==id):a.includes(id)?a:[...a,id])}
-function drop(target:'library'|'comparison'){if(dragged.current)move(dragged.current,target);dragged.current=''}function reorder(target:string){if(!dragged.current||dragged.current===target)return;setActive(a=>{const next=a.filter(x=>x!==dragged.current);next.splice(next.indexOf(target),0,dragged.current);return next});dragged.current=''}async function runBatch(){if(!reference){setBatchNotice('Upload reference audio first.');return}const texts=batchTexts.split('\n').map(x=>x.trim()).filter(Boolean);if(!texts.length){setBatchNotice('Enter one sentence per line.');return}try{const r=await req('/api/batches',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reference_id:reference.id,models:active,texts,repetitions:repeats})});setBatchNotice('Batch submitted: '+r.total_jobs+' jobs. Job IDs: '+r.generation_ids.join(', '));await showHistory()}catch(e){setBatchNotice(String(e))}}
-function card(id:string){const m=models.find(x=>x.id===id)!;const j=jobs.find(x=>x.model_id===id);return <article className="voice-card" key={id} draggable onDragOver={e=>e.preventDefault()} onDrop={e=>{e.stopPropagation();reorder(id)}} onDragStart={e=>{dragged.current=id;e.dataTransfer.effectAllowed='move'}}><header><span className="handle" title="Drag to sidebar">⋮</span><strong>{m.name}</strong><button className="text-btn" aria-label={'Move '+m.name+' to sidebar'} onClick={()=>move(id,'library')}>Remove</button></header>{j?.status==='complete'&&j.audio_url?<audio controls preload="metadata" src={API+j.audio_url}/>:<div className="empty-track"><div className="track-line"/><span>{j?.status==='failed'?'Generation failed':j?.status==='running'?'Generating…':j?.status==='pending'?'Waiting for GPU…':m.ready?'Ready to generate':'Worker unavailable'}</span></div>}<footer><span className={'status '+(j?.status==='failed'?'error':m.ready?'ready':'')}>{j?.status|| (m.ready?'Ready':'Offline')}</span>{j?.status==='failed'&&<small title={j.error}>{j.error}</small>}</footer></article>}
-return <div className="app"><aside><div className="brand">Voice Comparison Studio</div><div className="side-title">MODEL LIBRARY</div><section className="library" onDragOver={e=>e.preventDefault()} onDrop={()=>drop('library')}>{models.filter(m=>!active.includes(m.id)).map(m=><button className="library-item" draggable key={m.id} onDragStart={()=>dragged.current=m.id} onClick={()=>move(m.id,'comparison')}>{m.name}<span>Add +</span></button>)}<div className="drop-hint">Drag models here to remove them from comparison.</div></section><p className="sidebar-note">Moving a model does not reload it or erase saved audio.</p></aside><div className="main"><nav><div className="nav-tabs">{['Compare','Metrics','Experiments'].map(t=><button className={tab===t?'selected':''} onClick={()=>t==='Metrics'?showMetrics():t==='Experiments'?showHistory():setTab(t)} key={t}>{t}</button>)}</div><span className="app-status">{models.filter(m=>m.ready).length} / 3 workers ready</span></nav><main>{notice&&<div className="notice" role="alert">{notice}<button onClick={()=>setNotice('')}>Dismiss</button></div>}{tab==='Compare'?<><div className="heading"><div><h1>Compare voices</h1><p>Reference is configured in the backend. Models run one by one.</p></div><button className="primary" onClick={generate} disabled={busy||uploading}>{busy?'Generating in sequence…':'Generate'}</button></div><section className="reference-setup"><div className="section-top"><div><h2>Server reference</h2><p>Configured in backend/reference/ and retained across sessions.</p></div><span className="save-status">{reference?'Configured':'Not configured'}</span></div><div className="reference-row"><div className="reference-file"><label className="input-label">Reference audio</label><div className="stored-file"><span>{reference?.filename||'Missing: backend/reference/reference.wav'}</span></div></div><div className="reference-script"><label className="input-label">Reference transcript</label><div className="stored-file"><span>{referenceText||'Missing: backend/reference/reference.txt'}</span></div></div></div></section><label className="input-label" htmlFor="speech">Text to generate</label><textarea id="speech" value={text} onChange={e=>setText(e.target.value)} maxLength={2000} placeholder="Enter the speech you want all models to generate."/><div className="grid" onDragOver={e=>e.preventDefault()} onDrop={()=>drop('comparison')}><article className="voice-card reference"><header><strong>Original voice</strong><span className="quiet">Permanent reference</span></header>{reference?<audio src={API+'/api/references/'+reference.id+'/audio'} controls preload="metadata"/>:<div className="empty-track">Upload your reference audio above to enable playback.</div>}</article>{active.map(card)}{active.length===0&&<div className="empty-workspace">All models are in the sidebar. Drag one here or use Add.</div>}</div></>:tab==='Metrics'?<><div className="heading"><div><h1>Metrics & Analysis</h1><p>Scores appear only after actual backend evaluation.</p></div></div>{!jobs.length?<div className="panel">Generate a recording to view its evaluation status.</div>:<div className="panel"><table><thead><tr><th>Model</th><th>Evaluation</th><th>Metrics</th></tr></thead><tbody>{jobs.map(j=><tr key={j.id}><td>{models.find(m=>m.id===j.model_id)?.name}</td><td>{metrics[j.model_id]?.status||'Not checked'}</td><td>{metrics[j.model_id]?.metrics?.length?metrics[j.model_id].metrics.map((m:any)=>`${m.name}: ${Number(m.value).toFixed(4)}`).join(' · '):'No scores available'}</td></tr>)}</tbody></table><button className="outline" onClick={showMetrics}>Refresh metrics</button><div className='rating-section'><h3>Human evaluation</h3><p>Rate an existing generated recording. Kappa requires two or more raters scoring overlapping recordings.</p><input placeholder='Rater ID' value={rater} onChange={e=>setRater(e.target.value)}/><select value={rating} onChange={e=>setRating(Number(e.target.value))}>{[1,2,3,4,5].map(n=><option value={n} key={n}>{n}</option>)}</select><button className='outline' disabled={!rater||!jobs.some(j=>j.status==='complete')} onClick={async()=>{try{const j=jobs.find(j=>j.status==='complete');if(j){await req('/api/ratings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:j.id,rater,category:'naturalness',rating})});setNotice('Rating saved')}}catch(e){setNotice(String(e))}}}>Save naturalness rating for first completed voice</button></div></div>}</>:<><div className="heading"><div><h1>Experiments</h1><p>Saved inference requests and their records.</p></div></div><div className='panel'><h3>Batch experiment</h3><p>One script per line; selected models are processed one at a time on the GPU.</p><textarea placeholder='Sentence one&#10;Sentence two' value={batchTexts} onChange={e=>setBatchTexts(e.target.value)} /><label>Repetitions <input type='number' min={1} max={20} value={repeats} onChange={e=>setRepeats(Number(e.target.value))}/></label><button className='outline' onClick={runBatch}>Run batch</button>{batchNotice&&<p>{batchNotice}</p>}</div><div className="panel">{history.length?history.map(h=><button className="experiment" key={h.id} onClick={()=>{setBatchId(h.id);setTab('Compare');setText(h.text)}}><strong>{h.text.slice(0,90)}</strong><span>{new Date(h.created*1000).toLocaleString()}</span><a className='export' href={API+'/api/exports/'+h.id} onClick={e=>e.stopPropagation()}>Export ZIP</a></button>):'No experiments yet.'}</div></>}</main></div></div>}
+const post = (path:string, body:unknown) => req(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+function savedActive():string[] {
+  try {
+    const saved:unknown=JSON.parse(localStorage.getItem('voice.active') || 'null');
+    if (Array.isArray(saved) && saved.every(x=>typeof x==='string' && defaults.some(m=>m.id===x))) return [...new Set(saved)];
+  } catch { /* Use defaults when browser storage is invalid. */ }
+  return defaults.map(m=>m.id);
+}
+function Audio({path}:{path:string}) {
+  return <audio controls preload="metadata" crossOrigin="use-credentials" src={API+path}/>;
+}
+function App() {
+  const [tab,setTab]=useState('Compare');
+  const [models,setModels]=useState<Model[]>(defaults);
+  const [active,setActive]=useState<string[]>(savedActive);
+  const [reference,setReference]=useState<{id:string;filename:string}|null>(null);
+  const [referenceText,setReferenceText]=useState('');
+  const [text,setText]=useState('');
+  const [batchId,setBatchId]=useState(()=>localStorage.getItem('voice.batch') || '');
+  const [jobs,setJobs]=useState<Job[]>([]);
+  const [submitting,setSubmitting]=useState(false);
+  const [metrics,setMetrics]=useState<Record<string,Evaluation>>({});
+  const [notice,setNotice]=useState('');
+  const [loginRequired,setLoginRequired]=useState(false);
+  const [token,setToken]=useState('');
+  const [sessionVersion,setSessionVersion]=useState(0);
+  const [rater,setRater]=useState('');
+  const [rating,setRating]=useState(5);
+  const [ratingJob,setRatingJob]=useState('');
+  const [agreement,setAgreement]=useState('');
+  const dragged=useRef('');
+  const busy=submitting || jobs.some(j=>['pending','running'].includes(j.status));
+  const eligible=active.filter(id=>models.find(m=>m.id===id)?.configured);
+
+  useEffect(()=>{const listener=()=>setLoginRequired(true);window.addEventListener('studio-login',listener);return()=>window.removeEventListener('studio-login',listener)},[]);
+  useEffect(()=>{localStorage.setItem('voice.active',JSON.stringify(active))},[active]);
+  useEffect(()=>{
+    let cancelled=false;
+    const load=async()=>{
+      try {
+        const [profile,available]=await Promise.all([req('/api/reference-profile'),req('/api/models')]);
+        if(cancelled)return;
+        setReference(profile.reference);setReferenceText(profile.transcript);setModels(available);
+      } catch(error) {if(!cancelled)setNotice(String(error))}
+    };
+    load();const timer=window.setInterval(load,15000);
+    return()=>{cancelled=true;clearInterval(timer)};
+  },[sessionVersion]);
+  useEffect(()=>{
+    if(!batchId)return;
+    localStorage.setItem('voice.batch',batchId);
+    let cancelled=false; let timer:number;
+    const poll=async()=>{
+      try {
+        const result=await req('/api/generations/'+batchId);
+        if(cancelled)return;
+        setJobs(result.jobs);setText(result.text);
+        if(result.jobs.some((j:Job)=>['pending','running'].includes(j.status))) timer=window.setTimeout(poll,1500);
+      }catch(error){
+        if(cancelled)return;
+        if((error as Error & {status:number}).status===404){setBatchId('');setJobs([]);localStorage.removeItem('voice.batch')}
+        else if((error as Error & {status:number}).status!==401)timer=window.setTimeout(poll,4000);
+        setNotice(String(error));
+      }
+    };
+    poll();return()=>{cancelled=true;clearTimeout(timer)};
+  },[batchId,sessionVersion]);
+  useEffect(()=>{
+    if(tab!=='Metrics' || !jobs.length)return;
+    let cancelled=false;let timer:number;
+    const refresh=async()=>{
+      const results=await Promise.all(jobs.map(async j=>[j.id,await req('/api/evaluations/'+j.id).catch(()=>({status:'unavailable',metrics:[]}))] as const));
+      if(cancelled)return;
+      setMetrics(Object.fromEntries(results));
+      if(results.some(([,r])=>['pending','running'].includes(r.status)) || busy)timer=window.setTimeout(refresh,2000);
+    };
+    refresh();return()=>{cancelled=true;clearTimeout(timer)};
+  },[tab,jobs,sessionVersion,busy]);
+
+  async function generate(){
+    if(!text.trim() || !reference || !eligible.length)return;
+    setSubmitting(true);setNotice('');
+    try {
+      const result=await post('/api/generations',{text,models:eligible});
+      setJobs(result.jobs);setMetrics({});setBatchId(result.id);
+      if(eligible.length!==active.length)setNotice('Unavailable models were skipped. Their cards show the required setup.');
+    }catch(error){setNotice(String(error))}finally{setSubmitting(false)}
+  }
+  function move(id:string,target:'library'|'comparison'){
+    if(!defaults.some(m=>m.id===id))return;
+    setActive(a=>target==='library'?a.filter(x=>x!==id):a.includes(id)?a:[...a,id]);
+  }
+  function drop(target:'library'|'comparison'){move(dragged.current,target);dragged.current=''}
+  function reorder(target:string){
+    const id=dragged.current;
+    if(!id || id===target)return;
+    setActive(a=>{const next=a.filter(x=>x!==id);next.splice(next.indexOf(target),0,id);return next});dragged.current='';
+  }
+  function card(id:string){
+    const model=models.find(m=>m.id===id)!;const job=jobs.find(j=>j.model_id===id);
+    return <article className="voice-card" key={id} draggable onDragStart={()=>{dragged.current=id}} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.stopPropagation();reorder(id)}}>
+      <header><span className="handle" aria-hidden="true">⋮</span><strong>{model.name}</strong><button className="text-btn" onClick={()=>move(id,'library')}>Remove</button></header>
+      {job?.status==='complete' && job.audio_url?<Audio path={job.audio_url}/>:<div className="empty-track"><div className="track-line"/><span>{job?.status==='running'?'Generating…':job?.status==='pending'?'Queued for this model':job?.status==='failed'?'Generation failed':model.configured?'Ready to generate':'Setup required'}</span></div>}
+      {model.detail && <p className="model-detail">{model.detail}</p>}
+      <footer><span className={'status '+(job?.status==='failed'?'error':model.configured?'ready':'')}>{job?.status || (model.configured?'Available':'Unavailable')}</span>{job?.runtime_seconds!=null && <span>{job.runtime_seconds.toFixed(2)} s</span>}{job?.error && <span className="error">{job.error}</span>}</footer>
+    </article>;
+  }
+  async function saveRating(){
+    try {
+      await post('/api/ratings',{job_id:ratingJob,rater:rater.trim(),category:'naturalness',rating});
+      const result=await req('/api/agreement');
+      setAgreement(result.kappa==null?'Agreement needs at least two raters with varied scores on shared recordings.':`Cohen’s kappa: ${result.kappa.toFixed(3)} (${result.items} recordings, ${result.raters.join(', ')})`);
+      setNotice('Rating saved.');
+    }catch(error){setNotice(String(error))}
+  }
+  return <div className="app">
+    <aside><div className="brand">Voice Comparison Studio</div><div className="side-title">MODEL LIBRARY</div><section className="library" onDragOver={e=>e.preventDefault()} onDrop={()=>drop('library')}>
+      {models.filter(m=>!active.includes(m.id)).map(m=><button className="library-item" key={m.id} draggable onDragStart={()=>{dragged.current=m.id}} onClick={()=>move(m.id,'comparison')}>{m.name}<span>Add +</span></button>)}<div className="drop-hint">Drag models here to remove them from comparison.</div>
+    </section><p className="sidebar-note">Move models without reloading the page. Saved audio stays available.</p></aside>
+    <div className="main"><nav><div className="nav-tabs">{['Compare','Metrics'].map(t=><button key={t} className={tab===t?'selected':''} onClick={()=>setTab(t)}>{t}</button>)}</div><span className="app-status">{models.filter(m=>m.configured).length} / 3 models available</span></nav>
+    <main>{notice && <div className="notice" role="alert">{notice}<button onClick={()=>setNotice('')}>Dismiss</button></div>}
+    {loginRequired && <form className="panel login" onSubmit={async e=>{e.preventDefault();try{await post('/api/session',{token});setToken('');setLoginRequired(false);setNotice('');setSessionVersion(v=>v+1)}catch(error){setNotice(String(error))}}}><h2>Connect to your studio</h2><label>Access token <input type="password" autoComplete="current-password" value={token} onChange={e=>setToken(e.target.value)}/></label><button className="outline" type="submit">Connect</button></form>}
+    {tab==='Compare'?<>
+      <div className="heading"><div><h1>Compare voices</h1><p>Selected available models generate simultaneously.</p></div><button className="primary" onClick={generate} disabled={busy || loginRequired || !reference || !text.trim() || !eligible.length}>{busy?'Generating…':'Generate'}</button></div>
+      <label className="input-label" htmlFor="speech">Text to generate</label><textarea id="speech" value={text} onChange={e=>setText(e.target.value)} maxLength={2000} placeholder="Enter the speech you want all models to generate."/>
+      <div className="grid" onDragOver={e=>e.preventDefault()} onDrop={()=>drop('comparison')}>
+        <article className="voice-card reference"><header><strong>Original voice</strong><span className="quiet">Server reference</span></header>{reference?<Audio path={'/api/references/'+reference.id+'/audio'}/>:<p>Place reference.wav and reference.txt in backend/reference/, then restart the server.</p>}<p className="reference-transcript">{referenceText}</p></article>
+        {active.map(card)}{!active.length && <div className="empty-workspace">Add a model from the library.</div>}
+      </div>
+    </>:<>
+      <div className="heading"><div><h1>Metrics & analysis</h1><p>Measured results for generated voices. Error rates are lower when better; speaker similarity is higher when better.</p></div></div>
+      {!jobs.length?<div className="panel">Generate audio to see measurements.</div>:<div className="panel metrics-panel"><table><thead><tr><th>Model</th><th>Evaluation</th><th>Measurements</th></tr></thead><tbody>{jobs.map(job=>{
+        const evaluation=metrics[job.id];return <tr key={job.id}><td>{models.find(m=>m.id===job.model_id)?.name}</td><td>{job.status!=='complete'?job.status:evaluation?.status || 'Loading…'}{job.status==='complete' && ['not_evaluated','failed','interrupted'].includes(evaluation?.status) && <button className="outline" onClick={async()=>{try{await post('/api/evaluations/'+job.id,{});setSessionVersion(v=>v+1)}catch(error){setNotice(String(error))}}}>Evaluate</button>}</td><td>{evaluation?.metrics.map(metric=><div key={metric.name}>{labels[metric.name]||metric.name}: <strong>{['wer','cer'].includes(metric.name)?(metric.value*100).toFixed(2)+'%':metric.value.toFixed(3)+(['duration_s','latency_s'].includes(metric.name)?' s':'')}</strong></div>)}{(job.error || evaluation?.error) && <p className="error">{job.error || evaluation?.error}</p>}{evaluation?.errors?.map(error=><p className="error" key={error.name}>{error.name}: {error.reason}</p>)}</td></tr>;
+      })}</tbody></table><div className="rating-section"><h3>Human evaluation</h3><p>Rate naturalness from 1 (poor) to 5 (excellent).</p><label>Recording <select value={ratingJob} onChange={e=>setRatingJob(e.target.value)}><option value="">Select a generated voice</option>{jobs.filter(j=>j.status==='complete').map(j=><option key={j.id} value={j.id}>{models.find(m=>m.id===j.model_id)?.name}</option>)}</select></label><label>Rater <input value={rater} maxLength={100} onChange={e=>setRater(e.target.value)}/></label><label>Score <select value={rating} onChange={e=>setRating(Number(e.target.value))}>{[1,2,3,4,5].map(n=><option key={n}>{n}</option>)}</select></label><button className="outline" disabled={!ratingJob || !rater.trim()} onClick={saveRating}>Save rating</button>{agreement && <p>{agreement}</p>}</div></div>}
+    </>}
+    </main></div>
+  </div>;
+}
 createRoot(document.getElementById('root')!).render(<App/>);

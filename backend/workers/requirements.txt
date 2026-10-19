@@ -6,3 +6,4 @@ numpy>=1.24
 # qwen3: qwen-tts, torch
 # cosyvoice3: follow included CosyVoice project's pinned requirements, PYTHONPATH
 # xtts-v2: coqui-tts and compatible torch; confirm checkpoint/license
+python-dotenv>=1,<2

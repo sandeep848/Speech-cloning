@@ -1,7 +1,5 @@
 name: GitHub Pages frontend
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 permissions:
   contents: read
@@ -21,7 +19,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm install
+      - run: npm ci
         working-directory: frontend
       - run: npm run build
         working-directory: frontend

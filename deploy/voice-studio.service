@@ -1,0 +1,20 @@
+# Adapt /srv/voice-studio and User before installing this unit.
+[Unit]
+Description=Voice Comparison Studio
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=voice-studio
+WorkingDirectory=/srv/voice-studio/backend
+EnvironmentFile=/srv/voice-studio/backend/.env
+ExecStart=/srv/voice-studio/.venv/bin/python -m uvicorn backend:app --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
