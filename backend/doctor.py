@@ -1,4 +1,4 @@
-"""Non-destructive diagnostics: run with the exact backend Python interpreter."""
+"""Non-destructive diagnostics for the unified single-environment Voice Comparison Studio."""
 
 import json
 import os
@@ -8,7 +8,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env", override=False)
-from inference import model_availability
+from direct_inference import model_availability
 
 
 def main():

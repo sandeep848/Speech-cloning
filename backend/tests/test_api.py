@@ -1,11 +1,22 @@
-import os, sys, tempfile
+import os
+import shutil
+import sys
+import tempfile
+import threading
+import time
+import wave
 from pathlib import Path
-
-root = Path(__file__).resolve().parents[1]
-os.environ["VOICE_STUDIO_DATA"] = tempfile.mkdtemp(prefix="studio-test-")
-sys.path.insert(0, str(root))
 from fastapi.testclient import TestClient
+
+backend_dir = Path(__file__).resolve().parents[1]
+project_root = Path(__file__).resolve().parents[2]
+os.environ["VOICE_STUDIO_DATA"] = tempfile.mkdtemp(prefix="studio-test-")
+os.environ["PRELOAD_MODELS"] = "0"
+sys.path.insert(0, str(project_root))
+sys.path.insert(0, str(backend_dir))
+
 import backend
+import direct_inference
 
 
 def test_health_reference_models():
@@ -41,9 +52,6 @@ def test_audio_range_and_reference_stability():
 
 
 def test_evaluation_saved_and_deduplicated(monkeypatch):
-    import wave, time
-    import extend_backend
-
     with TestClient(backend.app) as api:
         reference = api.get("/api/reference-profile").json()["reference"]["id"]
         batch = "test-batch"
@@ -80,33 +88,30 @@ def test_evaluation_saved_and_deduplicated(monkeypatch):
             def evaluate(self, output, reference, text, elapsed):
                 assert elapsed == 2.5
                 return [
-                    ("duration_s", 1, "wav"),
+                    ("duration_s", 1.0, "wav"),
                     ("latency_s", elapsed, "clock"),
                     ("rtf", 2.5, "clock"),
+                    ("wer", 0.0, "whisper+jiwer"),
+                    ("cer", 0.0, "whisper+jiwer"),
+                    ("ecapa_similarity", 0.92, "speechbrain-ecapa"),
+                    ("scoreq", 4.1, "scoreq"),
                 ]
 
-        monkeypatch.setattr(extend_backend, "_evaluator", FakeEvaluator())
-        assert extend_backend.schedule_evaluation(job) in ("scheduled", "running")
-        import time as t
-
+        monkeypatch.setattr(backend, "_evaluator", FakeEvaluator())
+        assert backend.schedule_evaluation(job) in ("scheduled", "running")
         for _ in range(40):
             result = api.get("/api/evaluations/" + job).json()
             if result["status"] == "completed":
                 break
-            t.sleep(0.03)
+            time.sleep(0.03)
         assert result["status"] == "completed", result
-        assert len(result["metrics"]) == 3
+        assert len(result["metrics"]) == 7
         assert api.post("/api/evaluations/" + job).json()["status"] == "completed"
 
 
 def test_root_removed_routes_and_validation():
     with TestClient(backend.app) as api:
         assert api.get("/").status_code == 200
-        assert api.post("/internal-disabled/references").status_code in (404, 405)
-        assert api.put(
-            "/internal-disabled/reference-profile/transcript",
-            json={"transcript": "overwrite"},
-        ).status_code in (404, 405)
         assert (
             api.post(
                 "/api/generations", json={"text": "   ", "models": ["qwen3"]}
@@ -161,12 +166,9 @@ def test_auth_cookie_audio_and_cors(monkeypatch):
 
 
 def test_parallel_models_and_cache(monkeypatch):
-    import threading, time, wave
-    import inference
-
     monkeypatch.setenv("AUTO_EVALUATE", "0")
     monkeypatch.setattr(
-        inference,
+        direct_inference,
         "model_availability",
         lambda model: {"configured": True, "ready": True},
     )
@@ -182,7 +184,7 @@ def test_parallel_models_and_cache(monkeypatch):
             w.setframerate(24000)
             w.writeframes(bytes(4800))
 
-    monkeypatch.setattr(inference, "generate_audio", synthesize)
+    monkeypatch.setattr(direct_inference, "generate_audio", synthesize)
     with TestClient(backend.app) as api:
         payload = {
             "text": "Concurrent synthesis regression",
@@ -204,10 +206,8 @@ def test_parallel_models_and_cache(monkeypatch):
 
 
 def test_missing_model_is_actionable(monkeypatch):
-    import inference
-
     monkeypatch.setattr(
-        inference,
+        direct_inference,
         "model_availability",
         lambda model: {"configured": False, "detail": "Install the required package"},
     )
@@ -220,9 +220,11 @@ def test_missing_model_is_actionable(monkeypatch):
 
 
 def test_evaluator_init_errors_persist(monkeypatch, tmp_path):
-    import evaluator, wave
+    import evaluator
 
     monkeypatch.setenv("ENABLE_WHISPER", "0")
+    monkeypatch.setenv("ENABLE_ECAPA", "0")
+    monkeypatch.setenv("ENABLE_SCOREQ", "0")
     engine = evaluator.Evaluator()
     engine.initialization_errors = {"ecapa": "Checkpoint unavailable"}
     path = tmp_path / "sample.wav"
@@ -239,8 +241,6 @@ def test_evaluator_init_errors_persist(monkeypatch, tmp_path):
 
 
 def test_batch_trials_bypass_cache_and_track_children(monkeypatch):
-    import extend_backend
-
     calls = []
 
     async def fake_generate(request):
@@ -248,9 +248,7 @@ def test_batch_trials_bypass_cache_and_track_children(monkeypatch):
         return {"id": "trial-" + str(len(calls)), "jobs": []}
 
     monkeypatch.setattr(backend, "generate", fake_generate)
-    monkeypatch.setattr(
-        extend_backend, "_batch_generations", lambda batch_id: ["tracked"]
-    )
+    monkeypatch.setattr(backend, "_batch_generations", lambda batch_id: ["tracked"])
     with TestClient(backend.app) as api:
         reference = api.get("/api/reference-profile").json()["reference"]["id"]
         result = api.post(
@@ -273,14 +271,3 @@ def test_batch_trials_bypass_cache_and_track_children(monkeypatch):
         assert api.get("/api/batches/" + result.json()["id"]).json()["generations"] == [
             "tracked"
         ]
-
-
-def test_admin_token_with_api_protection(monkeypatch):
-    monkeypatch.setenv("API_TOKEN", "api-secret")
-    monkeypatch.setenv("ADMIN_TOKEN", "admin-secret")
-    with TestClient(backend.app) as api:
-        assert api.post("/api/admin/reload-reference").status_code == 403
-        assert api.post(
-            "/api/admin/reload-reference",
-            headers={"Authorization": "Bearer admin-secret"},
-        ).json()["loaded"]

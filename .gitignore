@@ -8,3 +8,8 @@ backend/reference/*.mp3
 backend/.env
 .env
 *.sqlite3
+
+logs/
+launcher.settings.json
+launcher.settings.suggested.json
+.ruff_cache/

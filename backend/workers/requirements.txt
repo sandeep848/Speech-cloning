@@ -1,9 +1,0 @@
-fastapi>=0.115,<1
-uvicorn>=0.30,<1
-soundfile>=0.12,<1
-numpy>=1.24
-# Install each model's own dependencies in its isolated worker environment.
-# qwen3: qwen-tts, torch
-# cosyvoice3: follow included CosyVoice project's pinned requirements, PYTHONPATH
-# xtts-v2: coqui-tts and compatible torch; confirm checkpoint/license
-python-dotenv>=1,<2
