@@ -4,25 +4,26 @@ A unified, single-environment research and benchmarking platform for state-of-th
 
 ---
 
-## Highlights & Novel Research Contributions
+## Speech quality and timing
 
-Voice Comparison Studio incorporates novel architectural protocols designed for cross-architecture neural TTS benchmarking (see [NOVELTY_AND_ARCHITECTURAL_SUGGESTIONS.md](NOVELTY_AND_ARCHITECTURAL_SUGGESTIONS.md)):
+- Outputs retain their generated length. They are never padded to a guessed speaking rate or truncated to make models match.
+- Short sentences stay together for context. Long inputs split at bounded word boundaries, with 100 ms continuation joins or 220 ms sentence joins.
+- Very quiet internal gaps longer than 650 ms are shortened conservatively. Set `MAX_INTERNAL_PAUSE_MS` between 150 and 3000 to change this limit.
+- Qwen caches its reference clone prompt. CosyVoice caches its zero-shot speaker and preserves multilingual text. XTTS caches conditioning from up to 30 seconds of reference with six-second chunks and uses its upstream repetition penalty of 10.
+- Language is isolated per request, including concurrent German and English jobs.
+- First audio latency is measured when an adapter returns its first completed chunk. It is not token latency or browser playback latency. True FFE is unavailable without aligned recordings of the same utterance.
 
-1. **Iso-Duration Speech Synthesis & Temporal Alignment Protocol (CATAS)**:
-   - Synchronizes speech duration across fundamentally different TTS architectures (autoregressive, flow-matching, diffusion).
-   - Uses silence-energy RMS thresholding and pause distribution to achieve sample-exact duration parity without phase-vocoder distortion.
-2. **Live Mid-Playback Cross-Fader & Zero-Drift Solo Switcher**:
-   - Seamlessly switch or sweep between Ground-Truth Reference, Qwen3-TTS, CosyVoice 3, and XTTS-v2 mid-sentence in real time.
-   - Eliminates human auditory echoic memory decay during A/B comparative listening.
-3. **Five-Axis Pareto Frontier Spider Matrix & Composite Voice Performance Index (VPI)**:
-   - Holistically evaluates models on a 0–100 scale balancing Acoustic Naturalness (ScoreQ/DNSMOS), Speaker Similarity (ECAPA), Phonetic Accuracy ($1 - \text{WER}$), Computational Throughput ($\text{RTFx}$), and Prosodic Inflection ($1 - \text{FFE}$).
-4. **Interactive Fundamental Frequency ($F_0$) & Prosody Contour Overlay**:
-   - Instantaneous pitch extraction ($65\text{Hz} - 360\text{Hz}$) using `librosa.yin` across 10ms frames.
-   - Overlays candidate engine pitch trajectories against the target speaker anchor line to detect monotone drift and pitch octave errors.
-5. **Token-Level Phonetic Alignment & Hallucination Diagnostics**:
-   - Word-level diff and confidence inspection pinpointing exact timestamps of pronunciation drift or hallucinated tokens.
-6. **Subjective Blind MOS / ABX Listening Suite**:
-   - Double-blind randomized evaluation with inter-rater agreement computation (Cohen's Kappa).
+See [AUDIT.md](AUDIT.md) for fixes, validation and remaining limitations. No model is guaranteed to beat another: quality, identity, accuracy and speed can have different winners.
+
+## Measure the models on your GPU
+
+After installing dependencies, run from the repository root:
+
+```bash
+python backend/benchmark.py --language German --repetitions 3
+```
+
+This runs an excluded warmup and three uncached trials per script and model, sequentially to reduce GPU contention. It saves generated WAVs, measured metrics, unavailable-metric errors and per-model medians under `backend/data/benchmarks/`. Listen blind as well as comparing WER/CER, ECAPA, quality scores and RTF. Use the same reference/transcript, hardware and settings for before/after runs. Numbers are ASR-sensitive; inspect transcripts when interpreting WER. English trials require an appropriate reference via `--reference` and `--transcript`.
 
 ---
 
@@ -37,11 +38,11 @@ Speech-cloning/
 │   ├── backend.py                          # Consolidated FastAPI service, SQLite persistence, and endpoints
 │   ├── direct_inference.py                 # Direct in-process synthesis interface
 │   ├── doctor.py                           # Non-destructive diagnostics for models, devices, and dependencies
-│   ├── evaluator.py                        # Automated multi-metric evaluation suite (WER, CER, ECAPA, ScoreQ, DNSMOS, FFE)
+│   ├── evaluator.py                        # Automated multi-metric evaluation suite (WER, CER, ECAPA, ScoreQ, DNSMOS)
 │   ├── requirements.txt                    # Python dependencies
 │   ├── .env.example                        # Configuration template
 │   ├── models/                             # Unified model manager & engine adapters
-│   │   ├── __init__.py                     # Model registry, device auto-selection, CATAS waveform assembly
+│   │   ├── __init__.py                     # Model registry, device auto-selection, natural waveform assembly
 │   │   ├── qwen3/                          # Qwen3-TTS 12Hz 1.7B Base loader, prompt caching, synthesis
 │   │   ├── cosyvoice3/                     # CosyVoice 3 0.5B loader, runtime shims, zero-shot synthesis
 │   │   ├── xtts_v2/                        # Coqui XTTS-v2 loader, voice clone conditioning, synthesis
@@ -77,8 +78,8 @@ Speech-cloning/
 | Engine | Parameter Size | Architecture | Strengths |
 | :--- | :--- | :--- | :--- |
 | **Qwen3-TTS** | 1.7B | Autoregressive + 12Hz Continuous Audio Codec | Exceptional naturalness, deep prosodic fidelity, strong zero-shot speaker capture. |
-| **CosyVoice 3** | 0.5B | Multi-Stage Flow Matching + LLM Backbone | Ultra-fast real-time factor ($\text{RTF} < 0.3$), highly stable pitch contour. |
-| **Coqui XTTS-v2** | Multilingual | Autoregressive + HiFi-GAN Vocoder | Rapid Time-to-First-Token ($\text{TTFT}$), robust multilingual cross-lingual cloning. |
+| **CosyVoice 3** | 0.5B | Multi-Stage Flow Matching + LLM Backbone | Zero-shot multilingual synthesis; benchmark speed on your hardware. |
+| **Coqui XTTS-v2** | Multilingual | Autoregressive + HiFi-GAN Vocoder | Multilingual cloning with cached speaker conditioning. |
 
 ---
 
@@ -95,12 +96,12 @@ All generated recordings are automatically benchmarked against the target refere
   - **ScoreQ Quality Score**: Non-intrusive neural Mean Opinion Score (1.00 – 5.00).
   - **Microsoft DNSMOS P.835**: Speech quality (SIG), background noise distortion (BAK), and overall quality (OVRL).
 - **Pitch & Inflection Accuracy**:
-  - **$F_0$ Frame Error Rate (FFE)**: librosa-YIN fundamental frequency tracking capturing gross pitch error and jitter.
+  - **FFE**: Unavailable for unaligned reference and generated speech; no substitute score is fabricated.
 - **Computational Throughput & Latency**:
   - **Generation Latency ($s$)**: End-to-end model execution time.
   - **Real-Time Factor (RTF)**: Generation seconds divided by audio duration seconds.
   - **Inverse RTF ($\text{RTFx}$)**: Speedup over real-time playback ($\text{target} > 1.25\times$).
-  - **Time-to-First-Token ($\text{TTFT}$)**: Estimated response latency for conversational applications.
+  - **Time to First Audio Chunk**: Observed completion time of the first generated chunk, excluding model loading.
 
 ---
 

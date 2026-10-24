@@ -186,7 +186,8 @@ def _patch_multilingual_frontend(engine) -> None:
     orig_text_normalize = fe.text_normalize
 
     def _multilingual_text_normalize(text: str, split: bool = True, text_frontend: bool = True):
-        lang = os.getenv("GENERATION_LANGUAGE", "German").strip().lower()
+        from models import generation_language
+        lang = generation_language().strip().lower()
         if lang in ("english", "en", "chinese", "zh") or contains_chinese(text):
             return orig_text_normalize(text, split=split, text_frontend=text_frontend)
         if "<|" in text and "|>" in text:
@@ -244,18 +245,7 @@ def load():
 
 
 def _normalize_german_text(text: str) -> str:
-    """Normalize German numbers, dates, units, and symbols to spoken German words."""
-    replacements = [
-        (r"\b1980\b", "Neunzehnhundertachtzig"),
-        (r"\b65\.000\b", "fünfundsechzigtausend"),
-        (r"\b240\b", "zweihundertvierzig"),
-        (r"\b1\.85\b", "eins Komma acht fünf"),
-        (r"€", " Euro "),
-        (r"%", " Prozent "),
-        (r"\bTTS\b", "T-T-S"),
-    ]
-    for pattern, repl in replacements:
-        text = re.sub(pattern, repl, text)
+    """Preserve content; let the multilingual model pronounce numbers in context."""
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -268,7 +258,7 @@ def synthesize(
     import numpy as np
     from models import (
         assemble_speech_waveform,
-        compute_target_samples,
+        mark_first_audio,
         split_speech_sentences,
     )
 
@@ -291,11 +281,10 @@ def synthesize(
 
     sentences = split_speech_sentences(clean_text)
     rate = int(engine.sample_rate)
-    if target_samples is None:
-        target_samples = compute_target_samples(sentences, rate)
 
     parts = []
     for sent in sentences:
+        sentence_parts = []
         for chunk in engine.inference_zero_shot(
             tts_text=sent,
             prompt_text=prompt_text,
@@ -304,6 +293,7 @@ def synthesize(
             stream=False,
             text_frontend=False,
         ):
+            mark_first_audio()
             part = (
                 chunk["tts_speech"]
                 .detach()
@@ -313,9 +303,12 @@ def synthesize(
                 .reshape(-1)
             )
             if part.size > 0:
-                parts.append(part)
+                sentence_parts.append(part)
+        if not sentence_parts:
+            raise RuntimeError("CosyVoice 3 returned no audio for a text chunk")
+        parts.append(np.concatenate(sentence_parts))
 
     if not parts:
         raise RuntimeError("CosyVoice 3 returned no audio")
-    samples = assemble_speech_waveform(parts, target_samples, rate)
+    samples = assemble_speech_waveform(parts, rate=rate, texts=sentences)
     return samples, rate

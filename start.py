@@ -22,25 +22,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 BACKEND = ROOT / "backend"
 
-OBSOLETE_PATHS = [
-    ROOT / "RUN_WINDOWS.txt",
-    ROOT / "START_STUDIO.bat",
-    ROOT / "setup_windows.py",
-    ROOT / "launcher.settings.json",
-    ROOT / "launcher.settings.example.json",
-    ROOT / "launcher.settings.suggested.json",
-    ROOT / "tests_launcher.py",
-    ROOT / "logs",
-    BACKEND / "extend_backend.py",
-    BACKEND / "inference.py",
-    BACKEND / "workers",
-    BACKEND / "models/qwen3/start.sh",
-    BACKEND / "models/cosyvoice3/start.sh",
-    BACKEND / "models/xtts_v2/start.sh",
-    BACKEND / "tests/test_inference.py",
-    BACKEND / "tests/test_worker.py",
-]
-
 REQUIRED_IMPORTS = {
     "fastapi": "fastapi",
     "uvicorn": "uvicorn",
@@ -61,17 +42,6 @@ REQUIRED_IMPORTS = {
     "speechbrain": "speechbrain",
     "scoreq": "scoreq",
 }
-
-
-def cleanup_obsolete_files() -> None:
-    for path in OBSOLETE_PATHS:
-        try:
-            if path.is_dir() and not path.is_symlink():
-                shutil.rmtree(path, ignore_errors=True)
-            elif path.exists() or path.is_symlink():
-                path.unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 def ensure_single_environment() -> None:
@@ -108,7 +78,14 @@ def ensure_dependencies_installed() -> None:
 
 
 def build_frontend() -> None:
-    if (ROOT / "frontend/dist/index.html").is_file():
+    built = ROOT / "frontend/dist/index.html"
+    sources = [* (ROOT / "frontend/src").rglob("*"),
+               ROOT / "frontend/package.json", ROOT / "frontend/package-lock.json",
+               ROOT / "frontend/vite.config.ts", ROOT / "frontend/index.html"]
+    if built.is_file() and all(
+        not path.is_file() or path.stat().st_mtime <= built.stat().st_mtime
+        for path in sources
+    ):
         return
     npm = shutil.which("npm.cmd") or shutil.which("npm")
     if not npm:
@@ -139,20 +116,17 @@ def open_browser_when_ready(url: str) -> None:
 
 
 def main() -> int:
-    local_storage_base = Path("/var/tmp/voice-studio-models")
-    local_storage_base.mkdir(parents=True, exist_ok=True)
-    (local_storage_base / "hf").mkdir(parents=True, exist_ok=True)
-    (local_storage_base / "tts").mkdir(parents=True, exist_ok=True)
-    (local_storage_base / "cosyvoice3").mkdir(parents=True, exist_ok=True)
-    (local_storage_base / "qwen3").mkdir(parents=True, exist_ok=True)
-    local_torch = local_storage_base / "py312-torch"
-    if local_torch.is_dir() and str(local_torch) not in sys.path:
-        sys.path.insert(0, str(local_torch))
-        os.environ["PYTHONPATH"] = (
-            f"{local_torch}:{os.environ['PYTHONPATH']}"
-            if os.environ.get("PYTHONPATH")
-            else str(local_torch)
-        )
+    # Respect configured paths on Linux, Windows and shared university hosts.
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(BACKEND / ".env", override=False)
+    except ImportError:
+        pass
+    local_storage_base = Path(os.getenv(
+        "VOICE_STUDIO_MODEL_CACHE", str(Path.home() / ".cache/voice-studio")
+    )).expanduser()
+    for subdir in ("hf", "tts", "cosyvoice3", "qwen3"):
+        (local_storage_base / subdir).mkdir(parents=True, exist_ok=True)
 
     os.environ.setdefault("HF_HOME", str(local_storage_base / "hf"))
     os.environ.setdefault("TTS_HOME", str(local_storage_base / "tts"))
@@ -168,7 +142,6 @@ def main() -> int:
     os.environ["USE_FLAX"] = "0"
     os.environ["PYTHONUNBUFFERED"] = "1"
 
-    cleanup_obsolete_files()
     ensure_single_environment()
 
     parser = argparse.ArgumentParser(description=__doc__)
