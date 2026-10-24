@@ -271,3 +271,45 @@ def test_batch_trials_bypass_cache_and_track_children(monkeypatch):
         assert api.get("/api/batches/" + result.json()["id"]).json()["generations"] == [
             "tracked"
         ]
+
+
+def test_auth_failure_includes_cors_headers(monkeypatch):
+    monkeypatch.setenv("API_TOKEN", "test-secret")
+    origin = backend.ORIGINS[0]
+    with TestClient(backend.app) as api:
+        for path in ("/api/models", "/api/reference-profile"):
+            response = api.get(path, headers={"Origin": origin})
+            assert response.status_code == 401
+            assert response.json() == {"detail": "Unauthorized"}
+            assert response.headers["access-control-allow-origin"] == origin
+            assert response.headers["access-control-allow-credentials"] == "true"
+        blocked = api.get("/api/models", headers={"Origin": "https://untrusted.test"})
+        assert blocked.status_code == 401
+        assert "access-control-allow-origin" not in blocked.headers
+
+
+def test_https_cross_site_login_cookie(monkeypatch):
+    monkeypatch.setenv("API_TOKEN", "test-secret")
+    monkeypatch.setenv("COOKIE_SECURE", "1")
+    origin = backend.ORIGINS[0]
+    with TestClient(backend.app, base_url="https://backend.test") as api:
+        response = api.post(
+            "/api/session", json={"token": "test-secret"}, headers={"Origin": origin}
+        )
+        assert response.status_code == 200
+        cookie = response.headers["set-cookie"].lower()
+        assert "secure" in cookie and "httponly" in cookie
+        assert "samesite=none" in cookie
+        assert api.get("/api/models", headers={"Origin": origin}).status_code == 200
+
+
+def test_local_http_login_cookie_remains_usable(monkeypatch):
+    monkeypatch.setenv("API_TOKEN", "test-secret")
+    monkeypatch.setenv("COOKIE_SECURE", "0")
+    with TestClient(backend.app) as api:
+        response = api.post("/api/session", json={"token": "test-secret"})
+        assert response.status_code == 200
+        cookie = response.headers["set-cookie"].lower()
+        assert "samesite=lax" in cookie
+        assert "; secure" not in cookie
+        assert api.get("/api/models").status_code == 200
