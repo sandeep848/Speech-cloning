@@ -92,13 +92,7 @@ async def lifespan(app):
 
 
 app = FastAPI(title="Voice Comparison Studio", version="1.0.0", lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ORIGINS,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
-    allow_headers=["Content-Type", "Authorization"],
-)
+
 
 
 @contextmanager
@@ -1011,12 +1005,13 @@ def login(body: Login):
         raise HTTPException(401, "Invalid access token")
     stamp = str(int(time.time()))
     response = JSONResponse({"authenticated": True})
+    secure_cookie = os.getenv("COOKIE_SECURE", "0") == "1"
     response.set_cookie(
         "studio_session",
         stamp + "." + session_signature(stamp),
         httponly=True,
-        secure=os.getenv("COOKIE_SECURE", "0") == "1",
-        samesite="lax",
+        secure=secure_cookie,
+        samesite="none" if secure_cookie else "lax",
         max_age=43200,
         path="/",
     )
@@ -1048,6 +1043,16 @@ async def protect_api(request: Request, call_next):
         if request.url.path not in public and not authenticated(request):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
     return await call_next(request)
+
+
+# Register CORS after authentication so it wraps early 401/403 responses too.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
+    allow_headers=["Content-Type", "Authorization"],
+)
 
 
 DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
