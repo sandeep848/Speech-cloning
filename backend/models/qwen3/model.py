@@ -82,20 +82,19 @@ def synthesize(
     import torch
     from models import (
         assemble_speech_waveform,
-        compute_target_samples,
+        generation_language,
+        mark_first_audio,
         split_speech_sentences,
     )
 
     engine = load()
-    lang = os.getenv("GENERATION_LANGUAGE", "German")
+    lang = generation_language()
     ref_resolved = reference.resolve()
     ref_str = str(ref_resolved)
     ref_mtime = ref_resolved.stat().st_mtime
     clean_transcript = re.sub(r"\s+", " ", transcript).strip()
     chunks = split_speech_sentences(text)
     rate = 24000
-    if target_samples is None:
-        target_samples = compute_target_samples(chunks, rate)
 
     with torch.inference_mode():
         prompt_item = None
@@ -139,9 +138,10 @@ def synthesize(
                 if not clean_transcript:
                     opts["x_vector_only_mode"] = True
                 wavs, rate = engine.generate_voice_clone(**opts)
+            mark_first_audio()
             rate = int(rate)
             part = np.asarray(wavs[0], dtype=np.float32).reshape(-1)
             wav_parts.append(part)
 
-        samples = assemble_speech_waveform(wav_parts, target_samples, rate)
+        samples = assemble_speech_waveform(wav_parts, rate=rate, texts=chunks)
         return samples, int(rate)

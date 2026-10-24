@@ -154,17 +154,12 @@ class Evaluator:
             if elapsed > 0:
                 measures.append(("rtfx", duration / elapsed, "clock"))
 
-        if ttft_ms is None:
-            # Benchmark latency for first chunk / token streaming
-            try:
-                from models import get_timing
-                ttft_ms = get_timing(output, "ttft_ms")
-            except Exception:
-                pass
-        if ttft_ms is None:
-            n_chunks = max(1, len([s for s in text.split(".") if s.strip()]))
-            ttft_ms = float(min(650.0, max(180.0, (elapsed / n_chunks) * 280.0)))
-        measures.append(("ttft_ms", float(round(ttft_ms, 1)), "clock"))
+        # Non-streaming engines do not expose token latency. Only report an
+        # observed completed-audio-chunk time when the adapter recorded one.
+        from models import get_timing
+        first_audio = get_timing(output, "first_audio_ms")
+        if first_audio is not None:
+            measures.append(("first_audio_ms", first_audio, "clock-first-audio-chunk"))
 
         if self.asr:
             try:
@@ -227,52 +222,8 @@ class Evaluator:
             except Exception as e:
                 self.errors["speaker"] = str(e)
 
-        # F0 Frame Error Rate (FFE)
-        try:
-            import soundfile as sf
-            import librosa
-            import numpy as np
-
-            gen, sr_gen = sf.read(output)
-            if gen.ndim > 1:
-                gen = gen.mean(axis=1)
-            ref, sr_ref = sf.read(reference)
-            if ref.ndim > 1:
-                ref = ref.mean(axis=1)
-
-            target_sr = 16000
-            if sr_gen != target_sr:
-                gen = librosa.resample(gen, orig_sr=sr_gen, target_sr=target_sr)
-            if sr_ref != target_sr:
-                ref = librosa.resample(ref, orig_sr=sr_ref, target_sr=target_sr)
-
-            frame_len = 512
-            hop_len = int(target_sr * 0.010)
-
-            f0_gen = librosa.yin(gen, fmin=65, fmax=360, sr=target_sr, frame_length=frame_len, hop_length=hop_len)
-            f0_ref = librosa.yin(ref, fmin=65, fmax=360, sr=target_sr, frame_length=frame_len, hop_length=hop_len)
-
-            rms_gen = librosa.feature.rms(y=gen, frame_length=frame_len, hop_length=hop_len)[0]
-            voiced_gen = rms_gen > (np.max(rms_gen) * 0.08)
-
-            rms_ref = librosa.feature.rms(y=ref, frame_length=frame_len, hop_length=hop_len)[0]
-            voiced_ref = rms_ref > (np.max(rms_ref) * 0.08)
-
-            ref_f0 = f0_ref[voiced_ref]
-            gen_f0 = f0_gen[voiced_gen]
-
-            if len(ref_f0) >= 5 and len(gen_f0) >= 5:
-                ref_med = float(np.median(ref_f0))
-                gpe = float(np.mean(np.abs(gen_f0 - ref_med) / ref_med > 0.35))
-                diffs = np.abs(np.diff(gen_f0))
-                jitter_err = float(np.mean(diffs > 35.0)) if len(diffs) > 0 else 0.03
-                ffe = float(np.clip(0.6 * gpe + 0.4 * jitter_err, 0.015, 0.085))
-            else:
-                ffe = 0.042
-
-            measures.append(("ffe", round(ffe, 4), "librosa-yin"))
-        except Exception as e:
-            self.errors["ffe"] = str(e)
+        # True FFE requires time-aligned recordings of the same utterance.
+        # A cloning reference usually contains different words, so omit FFE.
 
         if self.scoreq:
             try:

@@ -104,9 +104,9 @@ const METRIC_DEFS: MetricDef[] = [
         : { status: 'warning', text: 'BAD' },
   },
   {
-    key: 'ttft_ms',
-    label: 'Time to First Token (TTFT)',
-    benchmark: 'Good: < 350 ms | OK: 350–500 ms | Bad: > 500 ms',
+    key: 'first_audio_ms',
+    label: 'Time to First Audio Chunk',
+    benchmark: 'Measured completed audio chunk; excludes model loading',
     category: 'Speed & Latency',
     higherIsBetter: false,
     format: (v) => v.toFixed(0) + ' ms',
@@ -134,7 +134,7 @@ const METRIC_DEFS: MetricDef[] = [
   {
     key: 'ffe',
     label: 'F0 Frame Error Rate (FFE)',
-    benchmark: 'Good: < 5.0% | OK: 5.0%–9.0% | Bad: > 9.0%',
+    benchmark: 'Unavailable: requires the same utterance with time alignment',
     category: 'Pitch & Inflection',
     higherIsBetter: false,
     format: (v) => (v * 100).toFixed(1) + '%',
@@ -681,7 +681,7 @@ function App() {
         </div>
 
         <p className="sidebar-note">
-          Supports Qwen3-TTS, CosyVoice 3, and XTTS-v2 side-by-side with exact length alignment.
+          Supports Qwen3-TTS, CosyVoice 3, and XTTS-v2 side-by-side with natural speech timing.
         </p>
       </aside>
 
@@ -772,8 +772,7 @@ function App() {
                 <div>
                   <h1>Unified Voice Comparison</h1>
                   <p>
-                    All active models synthesize simultaneously with guaranteed identical output
-                    durations and natural pacing.
+                    Compare all active models with natural speech durations and pacing.
                   </p>
                 </div>
                 <div className="heading-actions">

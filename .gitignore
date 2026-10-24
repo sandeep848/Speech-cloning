@@ -13,3 +13,10 @@ logs/
 launcher.settings.json
 launcher.settings.suggested.json
 .ruff_cache/
+
+# Model downloads are machine-local, never commit absolute cache symlinks.
+backend/models/*/weights
+backend/models/cosyvoice3/repo
+backend/models/evaluators/whisper/
+backend/models/evaluators/ecapa/
+backend/models/evaluators/scoreq/

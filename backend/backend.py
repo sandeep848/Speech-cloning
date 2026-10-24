@@ -405,10 +405,14 @@ def execute_worker(
     output = ROOT / "audio" / f"{job_id}.wav"
     try:
         t0 = time.perf_counter()
-        os.environ["GENERATION_LANGUAGE"] = language
-        direct_inference.generate_audio(
-            model_id, text, Path(reference_path), reference_text, output
-        )
+        from models import _request_language
+        token = _request_language.set(language)
+        try:
+            direct_inference.generate_audio(
+                model_id, text, Path(reference_path), reference_text, output
+            )
+        finally:
+            _request_language.reset(token)
         t_elapsed = time.perf_counter() - t0
         with wave.open(str(output), "rb") as f:
             if f.getnframes() == 0:
@@ -615,7 +619,11 @@ async def generate(request: GenerateRequest):
                         request.text.strip(),
                         effective_transcript,
                         req_lang,
+                        "natural-pacing-v1",
                         os.getenv("MODEL_CACHE_VERSION", "6"),
+                        {key: value for key, value in os.environ.items()
+                         if key.startswith(("QWEN_", "XTTS_", "COSY_"))
+                         or key in ("MAX_INTERNAL_PAUSE_MS", "MODEL_DEVICE")},
                         os.getenv("QWEN_MODEL", ""),
                         os.getenv("COSY_MODEL_DIR", ""),
                         os.getenv("XTTS_MODEL", ""),

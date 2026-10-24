@@ -225,6 +225,7 @@ def test_evaluator_init_errors_persist(monkeypatch, tmp_path):
     monkeypatch.setenv("ENABLE_WHISPER", "0")
     monkeypatch.setenv("ENABLE_ECAPA", "0")
     monkeypatch.setenv("ENABLE_SCOREQ", "0")
+    monkeypatch.setenv("ENABLE_DNSMOS", "0")
     engine = evaluator.Evaluator()
     engine.initialization_errors = {"ecapa": "Checkpoint unavailable"}
     path = tmp_path / "sample.wav"

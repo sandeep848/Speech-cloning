@@ -1,16 +1,12 @@
 """Unified single-environment model manager for Qwen3-TTS, CosyVoice 3, and XTTS-v2."""
 
 from __future__ import annotations
+from contextvars import ContextVar
 import importlib.util
 import os
-import sys
 import threading
 import traceback
 from pathlib import Path
-
-_LOCAL_TORCH = Path("/var/tmp/voice-studio-models/py312-torch")
-if _LOCAL_TORCH.is_dir() and str(_LOCAL_TORCH) not in sys.path:
-    sys.path.insert(0, str(_LOCAL_TORCH))
 
 from models.qwen3 import model as qwen3_adapter
 from models.cosyvoice3 import model as cosyvoice3_adapter
@@ -25,6 +21,21 @@ ADAPTERS = {
 
 _locks = {m: threading.RLock() for m in MODEL_IDS}
 _import_lock = threading.RLock()
+_request_language = ContextVar("generation_language", default=None)
+_first_audio_clock = ContextVar("first_audio_clock", default=None)
+
+
+def generation_language() -> str:
+    return _request_language.get() or os.getenv("GENERATION_LANGUAGE", "German")
+
+
+def mark_first_audio() -> None:
+    """Measure the first completed audio chunk, never infer token latency."""
+    import time
+    clock = _first_audio_clock.get()
+    if clock is not None and clock[1] is None:
+        clock[1] = (time.perf_counter() - clock[0]) * 1000
+
 _engines: dict[str, object] = {}
 _states: dict[str, str] = {m: "idle" for m in MODEL_IDS}
 _errors: dict[str, str | None] = {m: None for m in MODEL_IDS}
@@ -62,7 +73,6 @@ def _package_present(model_id: str) -> bool:
                 ).expanduser()
                 / "cosyvoice"
             ).is_dir()
-            or importlib.util.find_spec("torch") is not None
         )
     return False
 
@@ -122,131 +132,115 @@ def preload_all_models() -> None:
             traceback.print_exc()
 
 
-def split_speech_sentences(text: str) -> list[str]:
+def split_speech_sentences(text: str, max_chars: int = 220) -> list[str]:
+    """Bound context without splitting ordinary commas, decimals or common titles."""
     import re
-
+    if max_chars < 20:
+        raise ValueError("max_chars must be at least 20")
     text = re.sub(r"\s+", " ", text).strip()
     if not text:
         return []
-    raw = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
-    if not raw:
-        return [text]
-    merged: list[str] = []
-    for s in raw:
-        if merged and len(merged[-1]) < 20 and len(merged[-1]) + 1 + len(s) <= 180:
-            merged[-1] = merged[-1] + " " + s
+    # Protect decimal points and abbreviations before finding sentence boundaries.
+    protected = re.sub(r"(?<=\d)\.(?=\d)", "\uE000", text)
+    protected = re.sub(
+        r"\b(?:Dr|Prof|Mr|Mrs|Ms|Sr|Jr|bzw|ca|usw|z|B|d|h)\.",
+        lambda m: m[0].replace(".", "\uE000"), protected, flags=re.I,
+    )
+    units = re.split(r"(?<=[.!?])\s+", protected)
+    chunks, current = [], ""
+    for unit in units:
+        unit = unit.replace("\uE000", ".")
+        while len(unit) > max_chars:
+            if current:
+                chunks.append(current)
+                current = ""
+            cut = unit.rfind(" ", 0, max_chars + 1)
+            if cut <= 0:
+                raise ValueError("A speech token exceeds the model context limit")
+            chunks.append(unit[:cut].strip())
+            unit = unit[cut:].strip()
+        if current and len(current) + 1 + len(unit) > max_chars:
+            chunks.append(current)
+            current = unit
         else:
-            merged.append(s)
-
-    final_sents: list[str] = []
-    for s in merged:
-        if len(s) > 160:
-            clauses = [c.strip() for c in re.split(r"(?<=[,;:])\s+", s) if c.strip()]
-            cur = ""
-            for c in clauses:
-                if cur and len(cur) + 1 + len(c) > 140:
-                    final_sents.append(cur)
-                    cur = c
-                else:
-                    cur = f"{cur} {c}".strip() if cur else c
-            if cur:
-                final_sents.append(cur)
-        else:
-            final_sents.append(s)
-    return final_sents or [text]
+            current = f"{current} {unit}".strip()
+    if current:
+        chunks.append(current)
+    return chunks
 
 
-def compute_target_samples(sents: list[str], rate: int = 24000) -> int:
-    total_chars = sum(len(s) for s in sents)
-    speech_sec = total_chars / 13.0
-    pause_sec = max(0, len(sents) - 1) * 0.28
-    total_sec = round(speech_sec + pause_sec + 0.20, 3)
-    return int(round(total_sec * rate))
-
-
-def trim_speech_silence(chunk, rate: int = 24000, thresh: float = 0.005):
+def trim_speech_silence(chunk, rate: int = 24000, thresh: float = 0.001):
+    """Trim only quiet edges, retaining 40 ms around detected activity."""
     import numpy as np
-
     chunk = np.asarray(chunk, dtype=np.float32).reshape(-1)
-    win = max(1, int(rate * 0.02))
-    n = chunk.size // win
-    if n < 4:
-        return chunk
-    rms = np.sqrt(np.mean(chunk[: n * win].reshape(n, win) ** 2, axis=1))
-    act = np.flatnonzero(rms > thresh)
-    if act.size == 0:
-        return chunk[:0]
-    s = max(0, int(act[0]) * win - int(rate * 0.015))
-    e = min(chunk.size, int(act[-1] + 1) * win + int(rate * 0.025))
-    out = chunk[s:e].copy()
-    fi = min(int(rate * 0.012), out.size // 4)
-    fo = min(int(rate * 0.020), out.size // 4)
-    if fi > 1:
-        out[:fi] *= np.linspace(0.0, 1.0, fi, dtype=np.float32)
-    if fo > 1:
-        out[-fo:] *= np.linspace(1.0, 0.0, fo, dtype=np.float32)
-    return out
+    if not chunk.size or not np.isfinite(chunk).all():
+        raise RuntimeError("Model returned empty or non-finite audio")
+    win = max(1, int(rate * 0.01))
+    padded = np.pad(chunk, (0, (-chunk.size) % win))
+    rms = np.sqrt(np.mean(padded.reshape(-1, win) ** 2, axis=1))
+    peak_rms = float(rms.max())
+    if peak_rms <= 1e-7:
+        raise RuntimeError("Model returned silent audio")
+    threshold = min(thresh, peak_rms * 0.02)
+    active = np.flatnonzero(rms > threshold)
+    margin = int(rate * 0.04)
+    start = max(0, int(active[0]) * win - margin)
+    end = min(chunk.size, int(active[-1] + 1) * win + margin)
+    return chunk[start:end].copy()
 
 
-def assemble_speech_waveform(
-    chunks: list, target_samples: int, rate: int = 24000
-):
+def cap_long_pauses(samples, rate: int):
+    """Cap only sustained very quiet gaps; preserve normal prosody and word endings."""
     import numpy as np
-
-    clean_chunks = [
-        trim_speech_silence(c, rate)
-        for c in chunks
-        if c is not None and getattr(c, "size", 0) > 0
-    ]
-    if not clean_chunks:
-        return np.zeros(target_samples, dtype=np.float32)
-    speech_samples = sum(c.size for c in clean_chunks)
-    needed_silence = max(0, target_samples - speech_samples)
-
-    head_pad = min(int(rate * 0.04), needed_silence // 4)
-    tail_pad = min(int(rate * 0.06), needed_silence // 3)
-    rem = max(0, needed_silence - head_pad - tail_pad)
-
-    k = len(clean_chunks)
-    parts = [np.zeros(head_pad, dtype=np.float32)]
-    if k > 1:
-        base_pause = rem // (k - 1)
-        extra = rem % (k - 1)
-        for i, c in enumerate(clean_chunks):
-            parts.append(c)
-            if i < k - 1:
-                p_len = base_pause + (1 if i < extra else 0)
-                parts.append(np.zeros(p_len, dtype=np.float32))
-    else:
-        parts.append(clean_chunks[0])
-        tail_pad += rem
-    parts.append(np.zeros(tail_pad, dtype=np.float32))
-    out = np.concatenate(parts)
-    if out.size < target_samples:
-        out = np.pad(out, (0, target_samples - out.size))
-    elif out.size > target_samples:
-        out = out[:target_samples]
-    peak = float(np.max(np.abs(out)))
-    if peak > 0.01:
-        out = out * (0.85 / peak)
-    return out
+    max_pause = float(os.getenv("MAX_INTERNAL_PAUSE_MS", "650")) / 1000
+    if not 0.15 <= max_pause <= 3.0:
+        raise ValueError("MAX_INTERNAL_PAUSE_MS must be between 150 and 3000")
+    win = max(1, int(rate * 0.01))
+    padded = np.pad(samples, (0, (-samples.size) % win))
+    rms = np.sqrt(np.mean(padded.reshape(-1, win) ** 2, axis=1))
+    threshold = min(0.001, float(rms.max()) * 0.01)
+    quiet = rms <= threshold
+    edges = np.diff(np.r_[False, quiet, False].astype(int))
+    starts, ends = np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)
+    keep = int(rate * max_pause)
+    pieces, cursor = [], 0
+    for start, end in zip(starts, ends):
+        left, right = int(start) * win, min(samples.size, int(end) * win)
+        if left > 0 and right < samples.size and right - left > keep + 2 * win:
+            # Remove the middle of silence, leaving both speech boundaries intact.
+            cut_start, cut_end = left + keep // 2, right - (keep - keep // 2)
+            pieces.append(samples[cursor:cut_start])
+            cursor = cut_end
+    pieces.append(samples[cursor:])
+    return np.concatenate(pieces)
 
 
-def _postprocess_audio(samples, rate: int, target_samples: int | None = None):
+def assemble_speech_waveform(chunks: list, target_samples=None, rate: int = 24000,
+                             texts: list[str] | None = None):
+    """Preserve generated duration. Legacy target_samples is intentionally ignored."""
     import numpy as np
+    if not chunks:
+        raise RuntimeError("Model returned no audio chunks")
+    parts = []
+    for i, chunk in enumerate(chunks):
+        clean = cap_long_pauses(trim_speech_silence(chunk, rate), rate)
+        if i:
+            previous = texts[i - 1].rstrip() if texts else ""
+            pause_ms = 220 if previous.endswith((".", "!", "?")) else 100
+            parts.append(np.zeros(int(rate * pause_ms / 1000), dtype=np.float32))
+        parts.append(clean)
+    return np.concatenate(parts)
 
+
+def _postprocess_audio(samples, rate: int, target_samples=None):
+    import numpy as np
     samples = np.asarray(samples, dtype=np.float32).reshape(-1)
     if samples.size == 0 or not np.isfinite(samples).all():
-        return samples
-    samples = samples - float(np.mean(samples))
-    if target_samples is not None:
-        if samples.size < target_samples:
-            samples = np.pad(samples, (0, target_samples - samples.size))
-        elif samples.size > target_samples:
-            samples = samples[:target_samples]
+        raise RuntimeError("Model returned empty or invalid audio")
+    # Attenuate clipping risk; do not amplify a quiet recording or force its length.
     peak = float(np.max(np.abs(samples)))
-    if peak > 0.01:
-        samples = samples * (0.85 / peak)
+    if peak > 0.95:
+        samples = samples * (0.95 / peak)
     return samples
 
 
@@ -269,35 +263,24 @@ def generate_audio(
     model_id: str, text: str, reference: Path, transcript: str, output: Path
 ) -> None:
     import time
-    import numpy as np
     import soundfile as sf
 
     if model_id not in ADAPTERS:
         raise ValueError(f"Unknown model: {model_id}")
+    if not text.strip():
+        raise ValueError("Speech text must not be empty")
     with _locks[model_id]:
         get_engine(model_id)
-        sents = split_speech_sentences(text)
-        rate = 24000
-        target_samples = compute_target_samples(sents, rate)
-        synth_fn = ADAPTERS[model_id].synthesize
-        t_start = time.perf_counter()
+        clock = [time.perf_counter(), None]
+        token = _first_audio_clock.set(clock)
         try:
-            samples, rate = synth_fn(
-                text, reference, transcript, target_samples=target_samples
-            )
-        except TypeError:
-            samples, rate = synth_fn(text, reference, transcript)
-        t_synth = time.perf_counter() - t_start
-        record_timing(output, "latency_s", t_synth)
-
-        # Compute / record Time to First Token (TTFT)
-        n_chunks = max(1, len(sents))
-        ttft_estimate = min(680.0, max(180.0, (t_synth / n_chunks) * 290.0))
-        record_timing(output, "ttft_ms", ttft_estimate)
-
+            samples, rate = ADAPTERS[model_id].synthesize(text, reference, transcript)
+        finally:
+            _first_audio_clock.reset(token)
         if hasattr(samples, "detach"):
             samples = samples.detach().cpu().numpy()
-        samples = _postprocess_audio(samples, int(rate), target_samples=target_samples)
-        if samples.size == 0 or not np.isfinite(samples).all():
-            raise RuntimeError(f"{model_id} returned empty or invalid audio")
+        samples = _postprocess_audio(samples, int(rate))
         sf.write(str(output), samples, int(rate), subtype="PCM_16")
+        record_timing(output, "latency_s", time.perf_counter() - clock[0])
+        if clock[1] is not None:
+            record_timing(output, "first_audio_ms", clock[1])
