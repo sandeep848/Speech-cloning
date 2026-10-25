@@ -285,6 +285,7 @@ function AudioPlayer({ path, title }: { path: string; title?: string }) {
 
 function App() {
   const [tab, setTab] = useState<'Compare' | 'Metrics' | 'Evaluation'>('Compare');
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const [language, setLanguage] = useState<'German' | 'English'>('German');
   const [models, setModels] = useState<Model[]>(defaults);
   const [active, setActive] = useState<string[]>(savedActive);
@@ -456,6 +457,17 @@ function App() {
     dragged.current = '';
   }
 
+  function shiftModel(id: string, direction: number) {
+    setActive((current) => {
+      const from = current.indexOf(id);
+      const to = from + direction;
+      if (from < 0 || to < 0 || to >= current.length) return current;
+      const next = [...current];
+      [next[from], next[to]] = [next[to], next[from]];
+      return next;
+    });
+  }
+
   function card(id: string) {
     const model = models.find((m) => m.id === id) || {
       id,
@@ -468,7 +480,7 @@ function App() {
       <article
         className="voice-card"
         key={id}
-        draggable
+        draggable={window.matchMedia('(pointer: fine)').matches}
         onDragStart={() => {
           dragged.current = id;
         }}
@@ -483,9 +495,14 @@ function App() {
             ⋮⋮
           </span>
           <strong>{model.name}</strong>
-          <button className="text-btn" onClick={() => move(id, 'library')}>
-            Remove
-          </button>
+          <div className="card-actions">
+            <button className="order-btn" aria-label={`Move ${model.name} earlier`}
+              disabled={active.indexOf(id) === 0} onClick={() => shiftModel(id, -1)}>↑</button>
+            <button className="order-btn" aria-label={`Move ${model.name} later`}
+              disabled={active.indexOf(id) === active.length - 1} onClick={() => shiftModel(id, 1)}>↓</button>
+            <button className="text-btn" aria-label={`Remove ${model.name}`}
+              onClick={() => move(id, 'library')}>Remove</button>
+          </div>
         </header>
 
         {job?.status === 'complete' && job.audio_url ? (
@@ -613,71 +630,81 @@ function App() {
 
   return (
     <div className="app">
-      <aside>
+      <aside className={libraryOpen ? 'library-open' : ''} aria-label="Model library and speech presets">
         <div className="brand">
-          <div className="brand-logo">
-            <span className="brand-pill">VCS</span>
+          <div className="brand-copy">
+            <div className="brand-logo">
+              <span className="brand-pill">VCS</span>
+            </div>
+            <div className="brand-title">Voice Comparison Studio</div>
+            <div className="brand-subtitle">Unified Neural TTS Evaluation</div>
           </div>
-          <div className="brand-title">Voice Comparison Studio</div>
-          <div className="brand-subtitle">Unified Neural TTS Evaluation</div>
+          <button className="sidebar-toggle" type="button"
+            aria-expanded={libraryOpen} aria-controls="sidebar-content"
+            onClick={() => setLibraryOpen((open) => !open)}>
+            {libraryOpen ? 'Close library' : 'Models & presets'}
+          </button>
         </div>
 
-        <div className="side-title">AVAILABLE ENGINES</div>
-        <section
-          className="library"
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={() => drop('library')}
-        >
-          {models
-            .filter((m) => !active.includes(m.id))
-            .map((m) => (
+        <div id="sidebar-content" className="sidebar-content">
+          <div className="side-title">AVAILABLE ENGINES</div>
+          <section
+            className="library"
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={() => drop('library')}
+          >
+            {models
+              .filter((m) => !active.includes(m.id))
+              .map((m) => (
+                <button
+                  className="library-item"
+                  key={m.id}
+                  draggable={window.matchMedia('(pointer: fine)').matches}
+                  onDragStart={() => {
+                    dragged.current = m.id;
+                  }}
+                  onClick={() => move(m.id, 'comparison')}
+                >
+                  <span>{m.name}</span>
+                  <span className="add-pill">+ Add</span>
+                </button>
+              ))}
+            {!models.some((m) => !active.includes(m.id)) && (
+              <div className="drop-hint all-active">All engines in active comparison.</div>
+            )}
+            <div className="drop-hint">Tap Add or Remove to select engines. Use arrows to change their order.</div>
+          </section>
+
+          <div className="side-title" style={{ marginTop: '24px' }}>
+            SPEECH PRESETS
+          </div>
+          <div className="preset-list">
+            {(language === 'English' ? PRESET_SCRIPTS_EN : PRESET_SCRIPTS_DE).map((p, idx) => (
               <button
-                className="library-item"
-                key={m.id}
-                draggable
-                onDragStart={() => {
-                  dragged.current = m.id;
-                }}
-                onClick={() => move(m.id, 'comparison')}
+                key={idx}
+                className="preset-btn"
+                onClick={() => { setText(p.text); setLibraryOpen(false); }}
+                title="Click to load preset text"
               >
-                <span>{m.name}</span>
-                <span className="add-pill">+ Add</span>
+                <span className="preset-chip">SCRIPT</span> {p.name}
               </button>
             ))}
-          {!models.some((m) => !active.includes(m.id)) && (
-            <div className="drop-hint all-active">All engines in active comparison.</div>
-          )}
-          <div className="drop-hint">Drag engines here to temporarily park them.</div>
-        </section>
+          </div>
 
-        <div className="side-title" style={{ marginTop: '24px' }}>
-          SPEECH PRESETS
+          <p className="sidebar-note">
+            Supports Qwen3-TTS, CosyVoice 3, and XTTS-v2 side-by-side with natural speech timing.
+          </p>
         </div>
-        <div className="preset-list">
-          {(language === 'English' ? PRESET_SCRIPTS_EN : PRESET_SCRIPTS_DE).map((p, idx) => (
-            <button
-              key={idx}
-              className="preset-btn"
-              onClick={() => setText(p.text)}
-              title="Click to load preset text"
-            >
-              <span className="preset-chip">SCRIPT</span> {p.name}
-            </button>
-          ))}
-        </div>
-
-        <p className="sidebar-note">
-          Supports Qwen3-TTS, CosyVoice 3, and XTTS-v2 side-by-side with natural speech timing.
-        </p>
       </aside>
 
       <div className="main">
-        <nav>
+        <nav aria-label="Studio navigation">
           <div className="nav-tabs">
             {(['Compare', 'Metrics', 'Evaluation'] as const).map((t) => (
               <button
                 key={t}
                 className={tab === t ? 'selected' : ''}
+                aria-current={tab === t ? 'page' : undefined}
                 onClick={() => setTab(t)}
               >
                 {t === 'Compare'
@@ -769,7 +796,7 @@ function App() {
                       download={`voice_comparison_${batchId}.zip`}
                       title="Download complete audio bundle and CSV metrics in a ZIP archive"
                     >
-                      Export All (.zip)
+                      Export All
                     </a>
                   )}
                   <button
@@ -842,7 +869,7 @@ function App() {
                 {active.map(card)}
                 {!active.length && (
                   <div className="empty-workspace">
-                    Add models from the left sidebar library to compare.
+                    Open Models & presets to add engines to the comparison.
                   </div>
                 )}
               </div>
@@ -961,7 +988,9 @@ function App() {
                           Higher values better for ScoreQ, Similarity, RTFx. Lower better for CER, WER, RTF.
                         </span>
                       </div>
-                      <div className="table-responsive">
+                      <p className="table-scroll-hint">Swipe the table to see every model and metric.</p>
+                      <div className="table-responsive" role="region" tabIndex={0}
+                        aria-label="Model comparison metrics; scroll horizontally to view all columns">
                         <table className="benchmark-table">
                           <thead>
                             <tr>
@@ -1045,7 +1074,9 @@ function App() {
                               )}
                           </div>
 
-                          <div className="table-responsive">
+                          <p className="table-scroll-hint">Swipe the table to see every metric detail.</p>
+                          <div className="table-responsive" role="region" tabIndex={0}
+                            aria-label="Detailed model metrics; scroll horizontally to view all columns">
                             <table className="benchmark-table individual-table">
                               <thead>
                                 <tr>
