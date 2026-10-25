@@ -84,7 +84,8 @@ def synthesize(
         assemble_speech_waveform,
         generation_language,
         mark_first_audio,
-        split_speech_sentences,
+        plan_speech,
+        get_speech_rate,
     )
 
     engine = load()
@@ -93,7 +94,8 @@ def synthesize(
     ref_str = str(ref_resolved)
     ref_mtime = ref_resolved.stat().st_mtime
     clean_transcript = re.sub(r"\s+", " ", transcript).strip()
-    chunks = split_speech_sentences(text)
+    plan = plan_speech(text)
+    chunks = [item.text for item in plan]
     rate = 24000
 
     with torch.inference_mode():
@@ -143,5 +145,7 @@ def synthesize(
             part = np.asarray(wavs[0], dtype=np.float32).reshape(-1)
             wav_parts.append(part)
 
-        samples = assemble_speech_waveform(wav_parts, rate=rate, texts=chunks)
+        samples = assemble_speech_waveform(wav_parts, rate=rate, texts=chunks,
+            pauses_ms=[item.pause_after_ms for item in plan],
+            speech_rate=get_speech_rate("qwen3"))
         return samples, int(rate)

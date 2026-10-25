@@ -1,4 +1,17 @@
-# Speech pipeline audit — 24 October 2026
+# Speech pipeline audit
+
+## Pacing update — 25 October 2026
+
+User listening feedback identified rushed delivery and weak comma, sentence and paragraph pauses. The previous implementation collapsed paragraph whitespace and kept short sentences in one model call, so most boundary timing still depended on the engine.
+
+- Added a shared phrase plan for all three adapters, preserving punctuation and blank-line paragraph boundaries while protecting decimal separators, common abbreviations and initials.
+- Comma/clause joins default to 150 ms, sentences to 320 ms, paragraphs to 600 ms. Existing quiet edge samples count toward each gap instead of stacking with inserted silence.
+- Qwen defaults to 0.92x speech rate; CosyVoice and XTTS default to 0.96x. Librosa time stretching retains pitch and the native sample-rate header. Inserted boundary pauses are not stretched.
+- Added environment settings and changed the pipeline cache revision; changing pacing settings also invalidates cache reuse.
+- Synthetic regression checks cover actual pause durations, retained paragraph breaks through adapters, duration changes and dominant pitch at 22.05/24/48 kHz.
+- Real-model listening validation still requires the deployment GPU. Clause-level generation may reset prosody or add latency for very short phrases, and phase-vocoder stretching can produce artifacts. Settings are adjustable; no perceptual improvement is claimed without listening.
+
+## Original fixes — 24 October 2026
 
 ## Fixed
 
@@ -6,7 +19,7 @@
 | --- | --- |
 | Character-count duration estimate distributed all unused time across chunk joins | Removed duration forcing. Assembly preserves complete generated audio and adds only bounded joins. |
 | Long outputs cut at the guessed sample count; sample count assumed 24 kHz | No clipping or padding to a duration target; each adapter's sample rate is retained. |
-| Sentence and comma splitting repeatedly reset model context | Group short sentences up to 220 characters; preserve ordinary commas, decimal points and common abbreviations; bound long punctuation-free inputs at words. |
+| Sentence and comma splitting repeatedly reset model context | Original fix grouped sentences; superseded by the punctuation-aware phrase plan above. Long punctuation-free inputs remain word-bounded. |
 | Excessive model-generated quiet gaps survived edge trimming | Conservative 10 ms RMS detection caps sustained internal silence at 650 ms by default. Short pauses and speech boundaries are retained. |
 | Fixed silence threshold could erase quiet speech and ignore final partial frames | Relative threshold, partial-frame handling and 40 ms edge margins. Silent, empty and non-finite chunks fail explicitly. |
 | CosyVoice output pieces each received an artificial pause | Concatenate pieces of one inference first, then join text chunks. |

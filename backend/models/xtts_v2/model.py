@@ -56,7 +56,8 @@ def synthesize(
         assemble_speech_waveform,
         generation_language,
         mark_first_audio,
-        split_speech_sentences,
+        plan_speech,
+        get_speech_rate,
     )
 
     engine = load()
@@ -80,8 +81,9 @@ def synthesize(
     else:
         gpt_cond_latent, speaker_embedding = _latent_cache[cache_key]
 
-    clean_text = re.sub(r"\s+", " ", text).strip()
-    sents = split_speech_sentences(clean_text)
+    clean_text = text.strip()
+    plan = plan_speech(clean_text)
+    sents = [item.text for item in plan]
     rate = int(engine.synthesizer.output_sample_rate)
 
     wav_chunks = []
@@ -110,5 +112,7 @@ def synthesize(
 
     if not wav_chunks:
         raise RuntimeError("XTTS-v2 returned no audio")
-    samples = assemble_speech_waveform(wav_chunks, rate=rate, texts=sents)
+    samples = assemble_speech_waveform(wav_chunks, rate=rate, texts=sents,
+            pauses_ms=[item.pause_after_ms for item in plan],
+            speech_rate=get_speech_rate("xtts-v2"))
     return samples, rate

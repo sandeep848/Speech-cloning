@@ -8,6 +8,8 @@ import threading
 import traceback
 from pathlib import Path
 
+from models.pacing import get_speech_rate, plan_speech, slow_speech
+
 from models.qwen3 import model as qwen3_adapter
 from models.cosyvoice3 import model as cosyvoice3_adapter
 from models.xtts_v2 import model as xtts_v2_adapter
@@ -215,20 +217,50 @@ def cap_long_pauses(samples, rate: int):
     return np.concatenate(pieces)
 
 
+def _edge_silence_samples(samples, rate: int) -> tuple[int, int]:
+    """Count quiet edge frames so joins do not stack pauses on retained silence."""
+    import numpy as np
+    win = max(1, int(rate * 0.005))
+    padded = np.pad(samples, (0, (-samples.size) % win))
+    rms = np.sqrt(np.mean(padded.reshape(-1, win) ** 2, axis=1))
+    active = np.flatnonzero(rms > min(0.001, float(rms.max()) * 0.02))
+    if not active.size:
+        raise RuntimeError("Model returned silent audio")
+    return int(active[0]) * win, max(0, samples.size - int(active[-1] + 1) * win)
+
+
 def assemble_speech_waveform(chunks: list, target_samples=None, rate: int = 24000,
-                             texts: list[str] | None = None):
-    """Preserve generated duration. Legacy target_samples is intentionally ignored."""
+                             texts: list[str] | None = None,
+                             pauses_ms: list[float] | None = None,
+                             speech_rate: float = 1.0):
+    """Preserve full phrases, gently slow speech and insert bounded boundary pauses."""
     import numpy as np
     if not chunks:
         raise RuntimeError("Model returned no audio chunks")
+    if texts is not None and len(texts) != len(chunks):
+        raise ValueError("Text and audio chunk counts must match")
+    if pauses_ms is not None and len(pauses_ms) != len(chunks):
+        raise ValueError("Pause and audio chunk counts must match")
     parts = []
+    previous_tail = 0
     for i, chunk in enumerate(chunks):
         clean = cap_long_pauses(trim_speech_silence(chunk, rate), rate)
+        head, tail = _edge_silence_samples(clean, rate)
+        if speech_rate != 1.0:
+            # Keep edge margins out of the vocoder: stretching quiet margins can
+            # smear speech into a boundary and make the effective gap too short.
+            end = clean.size - tail
+            clean = np.concatenate((clean[:head],
+                                    slow_speech(clean[head:end], speech_rate),
+                                    clean[end:]))
         if i:
             previous = texts[i - 1].rstrip() if texts else ""
-            pause_ms = 220 if previous.endswith((".", "!", "?")) else 100
-            parts.append(np.zeros(int(rate * pause_ms / 1000), dtype=np.float32))
+            pause_ms = (pauses_ms[i - 1] if pauses_ms is not None else
+                        320 if previous.endswith((".", "!", "?")) else 150)
+            pause_samples = max(0, int(rate * pause_ms / 1000) - previous_tail - head)
+            parts.append(np.zeros(pause_samples, dtype=np.float32))
         parts.append(clean)
+        previous_tail = tail
     return np.concatenate(parts)
 
 

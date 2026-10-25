@@ -619,11 +619,13 @@ async def generate(request: GenerateRequest):
                         request.text.strip(),
                         effective_transcript,
                         req_lang,
-                        "natural-pacing-v1",
+                        "punctuation-pacing-v2",
                         os.getenv("MODEL_CACHE_VERSION", "6"),
                         {key: value for key, value in os.environ.items()
                          if key.startswith(("QWEN_", "XTTS_", "COSY_"))
-                         or key in ("MAX_INTERNAL_PAUSE_MS", "MODEL_DEVICE")},
+                         or key in ("MAX_INTERNAL_PAUSE_MS", "MODEL_DEVICE", "SPEECH_RATE",
+                                        "COMMA_PAUSE_MS", "SENTENCE_PAUSE_MS",
+                                        "PARAGRAPH_PAUSE_MS", "CONTINUATION_PAUSE_MS")},
                         os.getenv("QWEN_MODEL", ""),
                         os.getenv("COSY_MODEL_DIR", ""),
                         os.getenv("XTTS_MODEL", ""),

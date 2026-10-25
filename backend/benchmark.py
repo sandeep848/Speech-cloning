@@ -52,7 +52,9 @@ def main():
               'transcript_sha256': hashlib.sha256(transcript.encode()).hexdigest(),
               'settings': {k: v for k, v in os.environ.items()
                            if k.startswith(('QWEN_', 'XTTS_', 'COSY_'))
-                           or k in ('MODEL_DEVICE', 'MAX_INTERNAL_PAUSE_MS')},
+                           or k in ('MODEL_DEVICE', 'MAX_INTERNAL_PAUSE_MS', 'SPEECH_RATE',
+                                    'COMMA_PAUSE_MS', 'SENTENCE_PAUSE_MS',
+                                    'PARAGRAPH_PAUSE_MS', 'CONTINUATION_PAUSE_MS')},
               'records': [], 'summary': {}}
     token = _request_language.set(args.language)
     try:

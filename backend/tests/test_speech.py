@@ -40,7 +40,7 @@ def test_comma_and_sentence_boundaries_keep_context():
 def test_join_pause_is_bounded_and_preserves_all_speech():
     a = tone()
     result = models.assemble_speech_waveform([a, a], 24000 * 40, texts=['Hello.', 'World.'])
-    assert len(result) == len(a) * 2 + int(24000 * .22)
+    assert len(result) == len(a) * 2 + int(24000 * .32)
     np.testing.assert_array_equal(result[:len(a)], a)
     np.testing.assert_array_equal(result[-len(a):], a)
 
@@ -132,15 +132,16 @@ def test_qwen_adapter_keeps_context_and_native_rate(monkeypatch, tmp_path):
         def generate_voice_clone(self, **kwargs):
             calls.append(kwargs)
             return [tone(22050)], 22050
-    monkeypatch.setitem(sys.modules, 'torch', SimpleNamespace(inference_mode=nullcontext))
+    monkeypatch.setitem(sys.modules, 'torch', SimpleNamespace(inference_mode=nullcontext, Tensor=type("Tensor", (), {})))
     monkeypatch.setattr(adapter, 'load', lambda: Engine())
     ref = tmp_path / 'reference.wav'
     ref.touch()
-    text = 'Hello, world. Another sentence.'
+    text = 'Hello, world.\n\nAnother sentence.'
     samples, rate = adapter.synthesize(text, ref, 'Reference transcript', target_samples=999999)
-    assert rate == 22050 and len(samples) == 11025
-    assert len(calls) == 1 and calls[0]['text'] == text
-    assert calls[0]['voice_clone_prompt'] == ['cached-prompt']
+    assert rate == 22050
+    assert abs(len(samples) / rate - (1.5 / .92 + .15 + .60)) < .02
+    assert [c['text'] for c in calls] == ['Hello,', 'world.', 'Another sentence.']
+    assert all(c['voice_clone_prompt'] == ['cached-prompt'] for c in calls)
 
 
 def test_xtts_uses_full_reference_conditioning(monkeypatch, tmp_path):
@@ -161,8 +162,8 @@ def test_xtts_uses_full_reference_conditioning(monkeypatch, tmp_path):
     ref = tmp_path / 'reference.wav'
     ref.touch()
     for _ in range(2):
-        samples, rate = adapter.synthesize('Hallo, Welt. Noch ein Satz.', ref, '')
-        assert len(samples) == 12000
+        samples, rate = adapter.synthesize('Hallo, Welt.\n\nNoch ein Satz.', ref, '')
+        assert abs(len(samples) / rate - (1.5 / .96 + .15 + .60)) < .02
     assert len(conditioning) == 1
     assert conditioning[0]['audio_path'] == [str(ref)]
     assert conditioning[0]['gpt_cond_len'] == 30
@@ -188,5 +189,7 @@ def test_cosy_internal_pieces_are_contiguous(monkeypatch, tmp_path):
     ref.touch()
     text = 'The year is 1980, and the price is 1.85 euros.'
     samples, rate = adapter.synthesize(text, ref, 'My reference transcript.')
-    assert len(samples) == 24000 and len(calls) == 1
-    assert calls[0]['tts_text'] == text
+    assert abs(len(samples) / rate - (2 / .96 + .15)) < .02
+    assert len(calls) == 2
+    assert ' '.join(c['tts_text'] for c in calls) == text
+    assert calls[1]['tts_text'] == 'and the price is 1.85 euros.'

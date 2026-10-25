@@ -259,13 +259,14 @@ def synthesize(
     from models import (
         assemble_speech_waveform,
         mark_first_audio,
-        split_speech_sentences,
+        plan_speech,
+        get_speech_rate,
     )
 
     clean_transcript = _normalize_german_text(transcript)
     if not clean_transcript:
         raise RuntimeError("CosyVoice 3 requires backend/reference/reference.txt")
-    clean_text = _normalize_german_text(text)
+    clean_text = text.strip()
     if not clean_text:
         raise RuntimeError("CosyVoice 3 requires non-empty input text")
     engine = load()
@@ -279,7 +280,8 @@ def synthesize(
         engine.add_zero_shot_spk(prompt_text, ref_str, spk_id)
         _spk_cache.add(spk_id)
 
-    sentences = split_speech_sentences(clean_text)
+    plan = plan_speech(clean_text)
+    sentences = [item.text for item in plan]
     rate = int(engine.sample_rate)
 
     parts = []
@@ -310,5 +312,7 @@ def synthesize(
 
     if not parts:
         raise RuntimeError("CosyVoice 3 returned no audio")
-    samples = assemble_speech_waveform(parts, rate=rate, texts=sentences)
+    samples = assemble_speech_waveform(parts, rate=rate, texts=sentences,
+            pauses_ms=[item.pause_after_ms for item in plan],
+            speech_rate=get_speech_rate("cosyvoice3"))
     return samples, rate

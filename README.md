@@ -7,13 +7,33 @@ A unified, single-environment research and benchmarking platform for state-of-th
 ## Speech quality and timing
 
 - Outputs retain their generated length. They are never padded to a guessed speaking rate or truncated to make models match.
-- Short sentences stay together for context. Long inputs split at bounded word boundaries, with 100 ms continuation joins or 220 ms sentence joins.
+- Speech is phrased at commas and sentence endings while retaining punctuation. Blank lines remain paragraph breaks. Decimal/thousands separators, titles and initials do not become artificial boundaries. Long phrases still split at bounded word boundaries.
+- Defaults are 150 ms at commas/semicolons/colons, 320 ms at sentence endings, 600 ms between paragraphs and 90 ms at long-phrase continuation joins. Retained model silence counts toward each pause, so gaps are not doubled.
+- Qwen speech is gently slowed to 0.92x; CosyVoice and XTTS to 0.96x. Pitch-preserving time stretching affects speech chunks only; it does not change the WAV sample rate or stretch inserted punctuation gaps.
 - Very quiet internal gaps longer than 650 ms are shortened conservatively. Set `MAX_INTERNAL_PAUSE_MS` between 150 and 3000 to change this limit.
 - Qwen caches its reference clone prompt. CosyVoice caches its zero-shot speaker and preserves multilingual text. XTTS caches conditioning from up to 30 seconds of reference with six-second chunks and uses its upstream repetition penalty of 10.
 - Language is isolated per request, including concurrent German and English jobs.
 - First audio latency is measured when an adapter returns its first completed chunk. It is not token latency or browser playback latency. True FFE is unavailable without aligned recordings of the same utterance.
 
 See [AUDIT.md](AUDIT.md) for fixes, validation and remaining limitations. No model is guaranteed to beat another: quality, identity, accuracy and speed can have different winners.
+
+### Tune pacing
+
+These defaults work without editing `.env`. To override them, add the following to `backend/.env`, restart the server and generate new audio:
+
+```ini
+QWEN_SPEECH_RATE=0.92
+COSY_SPEECH_RATE=0.96
+XTTS_SPEECH_RATE=0.96
+COMMA_PAUSE_MS=150
+SENTENCE_PAUSE_MS=320
+PARAGRAPH_PAUSE_MS=600
+CONTINUATION_PAUSE_MS=90
+```
+
+Rates are relative to model output: `1.0` preserves native speed. A common `SPEECH_RATE` can set all engines unless a model-specific rate overrides it. `XTTS_SPEED` remains its separate native inference control; keep it at `1.0` when using the shared adjustment to avoid compounding slowdowns. Blank lines create paragraph breaks; single wrapped line breaks remain inside a paragraph. Pause/rate settings are included in the generation cache key.
+
+These are configurable pacing defaults, not a guarantee of human-like speech. Clause-level synthesis can add inference overhead and reset prosody at boundaries, especially for very short phrases. Gentle time stretching can also introduce artifacts; compare actual model output and set the model-specific rate to `1.0` if preferred.
 
 ## Measure the models on your GPU
 
