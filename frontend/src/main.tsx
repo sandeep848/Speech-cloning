@@ -40,7 +40,7 @@ interface MetricDef {
   key: string;
   label: string;
   benchmark: string;
-  category: 'Accuracy' | 'Speed & Latency' | 'Acoustic Quality' | 'Pitch & Inflection';
+  category: 'Accuracy' | 'Speed & Latency' | 'Acoustic Quality';
   higherIsBetter?: boolean;
   format: (v: number) => string;
   getHealth: (v: number) => { status: 'excellent' | 'good' | 'warning'; text: string };
@@ -128,20 +128,6 @@ const METRIC_DEFS: MetricDef[] = [
       v >= 0.75
         ? { status: 'excellent', text: 'GOOD' }
         : v >= 0.65
-        ? { status: 'good', text: 'OK' }
-        : { status: 'warning', text: 'BAD' },
-  },
-  {
-    key: 'ffe',
-    label: 'F0 Frame Error Rate (FFE)',
-    benchmark: 'Unavailable: requires the same utterance with time alignment',
-    category: 'Pitch & Inflection',
-    higherIsBetter: false,
-    format: (v) => (v * 100).toFixed(1) + '%',
-    getHealth: (v) =>
-      v < 0.05
-        ? { status: 'excellent', text: 'GOOD' }
-        : v <= 0.09
         ? { status: 'good', text: 'OK' }
         : { status: 'warning', text: 'BAD' },
   },
@@ -870,7 +856,7 @@ function App() {
                   <h1>Advanced Evaluation & Benchmark Matrix</h1>
                   <p>
                     Standardized speech metrics including Character Error Rate (CER), Word Error Rate
-                    (WER), Real-Time Factor (RTF), Speaker Similarity (ECAPA), F0 Inflection (FFE),
+                    (WER), Real-Time Factor (RTF), Speaker Similarity (ECAPA),
                     ScoreQ MOS, and DNSMOS.
                   </p>
                 </div>
@@ -972,7 +958,7 @@ function App() {
                       <div className="table-top">
                         <h2>Model Competition Matrix</h2>
                         <span className="table-caption">
-                          Higher values better for ScoreQ, Similarity, RTFx. Lower better for CER, WER, RTF, FFE.
+                          Higher values better for ScoreQ, Similarity, RTFx. Lower better for CER, WER, RTF.
                         </span>
                       </div>
                       <div className="table-responsive">
