@@ -9,7 +9,7 @@ A unified, single-environment research and benchmarking platform for state-of-th
 - Outputs retain their generated length. They are never padded to a guessed speaking rate or truncated to make models match.
 - Speech is phrased at commas and sentence endings while retaining punctuation. Blank lines remain paragraph breaks. Decimal/thousands separators, titles and initials do not become artificial boundaries. Long phrases still split at bounded word boundaries.
 - Defaults are 150 ms at commas/semicolons/colons, 320 ms at sentence endings, 600 ms between paragraphs and 90 ms at long-phrase continuation joins. Retained model silence counts toward each pause, so gaps are not doubled.
-- Qwen speech is gently slowed to 0.92x; CosyVoice and XTTS to 0.96x. Pitch-preserving time stretching affects speech chunks only; it does not change the WAV sample rate or stretch inserted punctuation gaps.
+- Qwen speech is gently slowed to 0.92x with pitch-preserving time stretching. CosyVoice and XTTS use their native synthesis speed controls at 0.96x, avoiding an extra phase-vocoder pass. Native sample rates and inserted punctuation gaps remain unchanged.
 - Very quiet internal gaps longer than 650 ms are shortened conservatively. Set `MAX_INTERNAL_PAUSE_MS` between 150 and 3000 to change this limit.
 - Qwen caches its reference clone prompt. CosyVoice caches its zero-shot speaker and preserves multilingual text. XTTS caches conditioning from up to 30 seconds of reference with six-second chunks and uses its upstream repetition penalty of 10.
 - Language is isolated per request, including concurrent German and English jobs.
@@ -35,6 +35,16 @@ Rates are relative to model output: `1.0` preserves native speed. A common `SPEE
 
 These are configurable pacing defaults, not a guarantee of human-like speech. Clause-level synthesis can add inference overhead and reset prosody at boundaries, especially for very short phrases. Gentle time stretching can also introduce artifacts; compare actual model output and set the model-specific rate to `1.0` if preferred.
 
+## Inference performance
+
+- **Qwen:** On CUDA, the first phrase generates separately, then remaining phrases are batched in pairs. This preserves the first-audio observation point while reducing repeated generation calls. CPU defaults to individual phrases. Set `QWEN_BATCH_SIZE=1` to disable batching; values up to 8 are accepted. If a batch runs out of GPU memory, remaining phrases retry individually; unrelated decoding errors still fail explicitly.
+- **CosyVoice / XTTS:** Native speed adjustment replaces external audio stretching. Cached zero-shot speakers / XTTS conditioning are reused. Optional `COSY_LOAD_TRT=1` or `COSY_LOAD_VLLM=1` enables upstream accelerated backends only when compatible GPU dependencies and artifacts are already installed. They are off by default.
+- **Attention:** Qwen keeps SDPA by default. `QWEN_ATTN_IMPLEMENTATION=flash_attention_2` is optional and requires a compatible CUDA GPU, dtype and FlashAttention installation. It is not installed automatically.
+- **Scoring:** Automatic evaluators now default to CPU, leaving GPU memory for synthesis. `EVAL_DEVICE=cuda:0` can move them to GPU explicitly, or `auto` can select a device. CPU scoring may take longer to finish even when generation has less GPU contention.
+- **Reference quality:** `python backend/doctor.py` measures duration, sample rate, level, near-full-scale samples and DC-offset concerns without changing the reference audio. Verify that its transcript matches all spoken words.
+
+These changes are inference optimizations, not trained model improvements or guaranteed score gains. GPU batching changes memory use and sampling behavior; native speed control may change output acoustics. Compare repeated uncached trials and listen blind before claiming higher quality or lower latency. The slower pacing and explicit punctuation pauses remain enabled.
+
 ## Measure the models on your GPU
 
 After installing dependencies, run from the repository root:
@@ -43,7 +53,7 @@ After installing dependencies, run from the repository root:
 python backend/benchmark.py --language German --repetitions 3
 ```
 
-This runs an excluded warmup and three uncached trials per script and model, sequentially to reduce GPU contention. It saves generated WAVs, measured metrics, unavailable-metric errors and per-model medians under `backend/data/benchmarks/`. Listen blind as well as comparing WER/CER, ECAPA, quality scores and RTF. Use the same reference/transcript, hardware and settings for before/after runs. Numbers are ASR-sensitive; inspect transcripts when interpreting WER. English trials require an appropriate reference via `--reference` and `--transcript`.
+This runs an excluded warmup and three uncached trials per script and model, sequentially to reduce GPU contention. It records model-loading and first-generation warmup times separately, then saves generated WAVs, observed first-audio times, measured metrics, unavailable-metric errors, per-model medians and per-metric sample counts / means / ranges / nearest-rank p95 values under `backend/data/benchmarks/`. Listen blind as well as comparing WER/CER, ECAPA, quality scores and RTF. Use the same reference/transcript, hardware and settings for before/after runs. Numbers are ASR-sensitive; inspect transcripts when interpreting WER. English trials require an appropriate reference via `--reference` and `--transcript`.
 
 ---
 

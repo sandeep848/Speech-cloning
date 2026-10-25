@@ -619,7 +619,7 @@ async def generate(request: GenerateRequest):
                         request.text.strip(),
                         effective_transcript,
                         req_lang,
-                        "punctuation-pacing-v2",
+                        "native-speed-batching-v3",
                         os.getenv("MODEL_CACHE_VERSION", "6"),
                         {key: value for key, value in os.environ.items()
                          if key.startswith(("QWEN_", "XTTS_", "COSY_"))

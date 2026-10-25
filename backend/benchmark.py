@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import platform
 import statistics
@@ -11,7 +12,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / '.env', override=False)
-from models import MODEL_IDS, _request_language, generate_audio, get_engine
+from models import MODEL_IDS, _request_language, generate_audio, get_engine, get_timing
+from doctor import reference_diagnostics
 from evaluator import Evaluator
 
 SCRIPTS = {
@@ -26,6 +28,20 @@ SCRIPTS = {
         'A natural voice stays clear even during longer passages. It finishes every sentence completely, without inventing extra words.',
     ],
 }
+
+
+def metric_statistics(records: list[dict], model: str) -> dict:
+    rows = [r for r in records if r["model"] == model and "metrics" in r]
+    keys = {key for row in rows for key in row["metrics"]}
+    result = {}
+    for key in keys:
+        values = sorted(row["metrics"][key] for row in rows
+                        if key in row["metrics"] and math.isfinite(row["metrics"][key]))
+        if values:
+            result[key] = {"n": len(values), "median": statistics.median(values),
+                           "mean": statistics.mean(values), "min": values[0], "max": values[-1],
+                           "p95_nearest_rank": values[math.ceil(.95 * len(values)) - 1]}
+    return result
 
 
 def main():
@@ -55,22 +71,29 @@ def main():
                            or k in ('MODEL_DEVICE', 'MAX_INTERNAL_PAUSE_MS', 'SPEECH_RATE',
                                     'COMMA_PAUSE_MS', 'SENTENCE_PAUSE_MS',
                                     'PARAGRAPH_PAUSE_MS', 'CONTINUATION_PAUSE_MS')},
-              'records': [], 'summary': {}}
+              'reference_diagnostics': reference_diagnostics(args.reference),
+              'warmups': {}, 'records': [], 'summary': {}, 'statistics': {}}
     token = _request_language.set(args.language)
     try:
         for model in args.models:
             try:
+                load_started = time.perf_counter()
                 get_engine(model)
+                load_seconds = time.perf_counter() - load_started
                 # Warmup excluded from trials. Sequential trials avoid GPU contention.
+                warmup_started = time.perf_counter()
                 generate_audio(model, SCRIPTS[args.language][0], args.reference,
                                transcript, run_dir / f'{model}-warmup.wav')
+                report['warmups'][model] = {'load_s': load_seconds,
+                    'first_generation_s': time.perf_counter() - warmup_started}
                 for script_id, text in enumerate(SCRIPTS[args.language]):
                     for repetition in range(args.repetitions):
                         output = run_dir / f'{model}-{script_id}-{repetition}.wav'
                         started = time.perf_counter()
                         generate_audio(model, text, args.reference, transcript, output)
                         report['records'].append({'model': model, 'script': text,
-                            'audio': str(output), 'elapsed': time.perf_counter() - started})
+                            'audio': str(output), 'elapsed': time.perf_counter() - started,
+                            'first_audio_ms': get_timing(output, 'first_audio_ms')})
             except Exception as exc:
                 report['records'].append({'model': model, 'error': str(exc)})
             # Save partial progress even if the next engine fails.
@@ -84,10 +107,10 @@ def main():
                 row['audio'], str(args.reference), row['script'], row['elapsed'])}
             row['metric_errors'] = dict(evaluator.errors)
         for model in args.models:
-            rows = [r for r in report['records'] if r['model'] == model and 'metrics' in r]
-            keys = {k for r in rows for k in r['metrics']}
-            report['summary'][model] = {k: statistics.median(
-                r['metrics'][k] for r in rows if k in r['metrics']) for k in keys}
+            stats = metric_statistics(report['records'], model)
+            report['statistics'][model] = stats
+            report['summary'][model] = {key: value['median'] for key, value in stats.items()}
+
     finally:
         _request_language.reset(token)
         (run_dir / 'results.json').write_text(json.dumps(report, indent=2), encoding='utf-8')

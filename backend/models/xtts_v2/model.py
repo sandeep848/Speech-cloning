@@ -87,7 +87,9 @@ def synthesize(
     rate = int(engine.synthesizer.output_sample_rate)
 
     wav_chunks = []
-    speed_val = float(os.getenv("XTTS_SPEED", "1.00"))
+    speed_val = float(os.getenv("XTTS_SPEED", "1.00")) * get_speech_rate("xtts-v2")
+    if not 0.5 <= speed_val <= 1.5:
+        raise ValueError("Combined XTTS_SPEED and XTTS_SPEECH_RATE must be between 0.5 and 1.5")
     temp_val = float(os.getenv("XTTS_TEMPERATURE", "0.75"))
     rep_val = float(os.getenv("XTTS_REPETITION_PENALTY", "10.0"))
 
@@ -114,5 +116,5 @@ def synthesize(
         raise RuntimeError("XTTS-v2 returned no audio")
     samples = assemble_speech_waveform(wav_chunks, rate=rate, texts=sents,
             pauses_ms=[item.pause_after_ms for item in plan],
-            speech_rate=get_speech_rate("xtts-v2"))
+            speech_rate=1.0)
     return samples, rate

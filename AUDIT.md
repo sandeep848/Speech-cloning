@@ -1,5 +1,16 @@
 # Speech pipeline audit
 
+## Inference optimization update — 25 October 2026
+
+- Qwen generates the first phrase separately and batches later phrases in pairs on CUDA (CPU defaults to one). Input/output counts and sample rates are checked. A batch-specific out-of-memory condition retries remaining phrases individually after clearing free GPU allocations; other errors are not swallowed.
+- CosyVoice and XTTS use native speed controls instead of an extra external time-stretching pass. Slower pacing and explicit comma/sentence/paragraph joins are preserved.
+- Evaluators default to CPU unless explicitly configured otherwise, reducing GPU competition with synthesis. This trades scoring completion time for potentially more GPU capacity for TTS.
+- Added explicit opt-in upstream acceleration settings for Qwen FlashAttention and CosyVoice TensorRT/vLLM. These require compatible installed dependencies and are not enabled automatically.
+- Reference diagnostics report actual level, clipping-related samples, duration and DC-offset concerns. They neither denoise audio nor claim to verify transcript alignment.
+- Benchmarks distinguish model loading and first-generation warmup from repeated uncached trials. Measured metrics retain their values; extra statistics include sample counts, means, ranges and nearest-rank p95.
+- Validation: 60 backend tests passed, Python compilation, benchmark CLI and reference diagnostics ran. This environment has no PyTorch/TTS models or GPU, so live model inference, score gains and latency improvements remain unmeasured. No weights were fine-tuned, no score thresholds were altered, and no quality improvement is asserted from mock tests.
+
+
 ## Pacing update — 25 October 2026
 
 User listening feedback identified rushed delivery and weak comma, sentence and paragraph pauses. The previous implementation collapsed paragraph whitespace and kept short sentences in one model call, so most boundary timing still depended on the engine.

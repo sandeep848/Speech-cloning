@@ -154,7 +154,7 @@ def test_xtts_uses_full_reference_conditioning(monkeypatch, tmp_path):
             return 'latent', 'speaker'
         def inference(self, **kwargs):
             calls.append(kwargs)
-            return {'wav': tone()}
+            return {'wav': tone(seconds=.5 / kwargs['speed'])}
     engine = Engine()
     monkeypatch.setattr(adapter, 'load', lambda: SimpleNamespace(synthesizer=SimpleNamespace(
         tts_model=engine, output_sample_rate=24000)))
@@ -168,22 +168,24 @@ def test_xtts_uses_full_reference_conditioning(monkeypatch, tmp_path):
     assert conditioning[0]['audio_path'] == [str(ref)]
     assert conditioning[0]['gpt_cond_len'] == 30
     assert calls[0]['repetition_penalty'] == 10.0
+    assert calls[0]['speed'] == .96
 
 
 def test_cosy_internal_pieces_are_contiguous(monkeypatch, tmp_path):
     from models.cosyvoice3 import model as adapter
     class Tensor:
+        def __init__(self, speed): self.speed = speed
         def detach(self): return self
         def cpu(self): return self
-        def numpy(self): return tone()
+        def numpy(self): return tone(seconds=.5 / self.speed)
     calls = []
     class Engine:
         sample_rate = 24000
         def add_zero_shot_spk(self, *args): pass
         def inference_zero_shot(self, **kwargs):
             calls.append(kwargs)
-            yield {'tts_speech': Tensor()}
-            yield {'tts_speech': Tensor()}
+            yield {'tts_speech': Tensor(kwargs['speed'])}
+            yield {'tts_speech': Tensor(kwargs['speed'])}
     monkeypatch.setattr(adapter, 'load', lambda: Engine())
     ref = tmp_path / 'reference.wav'
     ref.touch()
@@ -193,3 +195,4 @@ def test_cosy_internal_pieces_are_contiguous(monkeypatch, tmp_path):
     assert len(calls) == 2
     assert ' '.join(c['tts_text'] for c in calls) == text
     assert calls[1]['tts_text'] == 'and the price is 1.85 euros.'
+    assert all(c['speed'] == .96 for c in calls)

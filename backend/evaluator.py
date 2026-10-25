@@ -18,12 +18,12 @@ class Evaluator:
         self.errors = {}
         EVAL_MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-        try:
+        # Keep ASR/speaker scoring away from GPU synthesis unless explicitly
+        # requested. Metric computation remains unchanged on either device.
+        device = os.getenv("EVAL_DEVICE", "cpu")
+        if device == "auto":
             from models import select_device
-
-            device = select_device("EVAL_DEVICE")
-        except Exception:
-            device = os.getenv("EVAL_DEVICE", "cpu")
+            device = select_device("MODEL_DEVICE")
 
         if os.getenv("ENABLE_WHISPER", "1") == "1":
             try:

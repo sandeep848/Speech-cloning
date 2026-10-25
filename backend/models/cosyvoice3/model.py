@@ -226,7 +226,15 @@ def load():
     from cosyvoice.cli.cosyvoice import AutoModel
 
     is_cuda = torch.cuda.is_available()
-    _engine = AutoModel(model_dir=str(weights_dir), fp16=is_cuda)
+    options = {"model_dir": str(weights_dir), "fp16": is_cuda}
+    # These backends require separately installed compatible GPU dependencies
+    # and artifacts. Do not silently download or enable them on ordinary hosts.
+    for variable, option in (("COSY_LOAD_TRT", "load_trt"), ("COSY_LOAD_VLLM", "load_vllm")):
+        if os.getenv(variable, "0") == "1":
+            if not is_cuda:
+                raise ValueError(f"{variable} requires CUDA")
+            options[option] = True
+    _engine = AutoModel(**options)
     if hasattr(_engine, "frontend") and hasattr(_engine.frontend, "en_tn_model"):
         orig_norm = _engine.frontend.en_tn_model.normalize
 
@@ -293,6 +301,7 @@ def synthesize(
             prompt_wav=ref_str,
             zero_shot_spk_id=spk_id,
             stream=False,
+            speed=get_speech_rate("cosyvoice3"),
             text_frontend=False,
         ):
             mark_first_audio()
@@ -314,5 +323,5 @@ def synthesize(
         raise RuntimeError("CosyVoice 3 returned no audio")
     samples = assemble_speech_waveform(parts, rate=rate, texts=sentences,
             pauses_ms=[item.pause_after_ms for item in plan],
-            speech_rate=get_speech_rate("cosyvoice3"))
+            speech_rate=1.0)
     return samples, rate
