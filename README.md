@@ -1,5 +1,12 @@
 # Voice Comparison Studio
 
+**Security candidate: internal testing only.** Private APIs now require configured authentication. For distinct user accounts use `AUTH_MODE=accounts`; a shared API token identifies one shared principal. Anonymous localhost use must be explicitly enabled with `DEV_ALLOW_ANONYMOUS=1` and is forbidden in production.
+
+See [implementation and validation evidence](docs/IMPLEMENTATION_REPORT.md), [deployment/configuration](docs/DEPLOYMENT.md), [API compatibility changes](docs/API.md), [backup recovery](docs/BACKUP_AND_RECOVERY.md) and [known limitations](docs/KNOWN_LIMITATIONS.md). The complete public-release requirements in the master prompt are not finished or certified.
+
+The launcher no longer installs packages without `--setup` (development only), automatically switches interpreters, or sets a process-wide unsafe Torch checkpoint-loading override. Install a reviewed compatible environment first. This deliberately changes the old startup instructions below; follow the deployment document for the candidate.
+
+
 A unified, single-environment research and benchmarking platform for state-of-the-art neural voice cloning. Run **Qwen3-TTS (1.7B)**, **CosyVoice 3 (0.5B)**, and **Coqui XTTS-v2** simultaneously side-by-side in one process, with comprehensive automated acoustic, intelligibility, speaker similarity, and latency evaluations.
 
 ---
@@ -138,7 +145,7 @@ All generated recordings are automatically benchmarked against the target refere
 ## Quick Start
 
 ### 1. Prerequisites
-- **Python**: 3.10 – 3.13 (Python 3.12 recommended)
+- **Python**: Python 3.12 used for API/tests; validate the chosen real-model environment separately
 - **Node.js**: v20+ and npm
 - **GPU**: NVIDIA GPU with CUDA recommended for real-time inference (CPU execution fallback supported)
 
@@ -168,7 +175,8 @@ npm run build
 cd ..
 
 # 3. Start the FastAPI server
-python -m uvicorn backend.backend:app --host 127.0.0.1 --port 8000
+cd backend
+python -m uvicorn backend:app --host 127.0.0.1 --port 8000
 ```
 
 Open **http://127.0.0.1:8000** in your browser.

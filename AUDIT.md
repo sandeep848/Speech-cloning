@@ -1,3 +1,7 @@
+# Current security implementation — 31 October 2026
+
+See [the implementation report](docs/IMPLEMENTATION_REPORT.md), [security boundaries](docs/SECURITY.md) and [release blockers](docs/KNOWN_LIMITATIONS.md). Historical findings below are not proof of current production readiness.
+
 # Speech pipeline audit
 
 ## Inference optimization update — 25 October 2026

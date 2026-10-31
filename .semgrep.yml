@@ -1,0 +1,27 @@
+rules:
+  - id: python-shell-true
+    languages: [python]
+    severity: ERROR
+    message: Shell execution is forbidden for application subprocesses.
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.run(..., shell=True, ...)
+          - pattern: subprocess.Popen(..., shell=True, ...)
+          - pattern: os.system(...)
+  - id: python-eval-exec
+    languages: [python]
+    severity: ERROR
+    message: Dynamic code execution requires explicit security review.
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: exec(...)
+  - id: unsafe-yaml-load
+    languages: [python]
+    severity: ERROR
+    message: Use safe YAML deserialization.
+    pattern: yaml.load(...)
+  - id: unsafe-react-html
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: Review HTML injection before enabling it.
+    pattern: <$TAG dangerouslySetInnerHTML={$VALUE} ... />
