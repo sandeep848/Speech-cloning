@@ -71,3 +71,24 @@ def test_age_encrypted_round_trip(tmp_path):
     failed=subprocess.run([sys.executable,str(script),'restore','--data',str(tmp_path/'bad-restore'),'--archive',str(corrupted),'--identity',str(key)],capture_output=True)
     assert failed.returncode != 0
     assert not (tmp_path/'bad-restore').exists()
+
+
+def test_restore_size_limit_is_checked_before_extraction(tmp_path,monkeypatch):
+    archive=tmp_path/'oversized.tar'
+    with tarfile.open(archive,'w') as tar:
+        member=tarfile.TarInfo('large.bin');member.size=100
+        tar.addfile(member,io.BytesIO(bytes(100)))
+    monkeypatch.setenv('MAX_RESTORE_BYTES','10')
+    root=tmp_path/'new-restore'
+    with pytest.raises(RuntimeError,match='limits'):restore_archive(archive,root)
+    assert not root.exists()
+
+
+def test_restore_rejects_incomplete_manifest_and_cleans_partial_directory(tmp_path):
+    archive=tmp_path/'incomplete.tar'
+    with tarfile.open(archive,'w') as tar:
+        member=tarfile.TarInfo('manifest.json');member.size=2
+        tar.addfile(member,io.BytesIO(b'{}'))
+    root=tmp_path/'new-restore'
+    with pytest.raises(RuntimeError,match='manifest'):restore_archive(archive,root)
+    assert not root.exists()

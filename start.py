@@ -1,8 +1,7 @@
 """Single-environment launcher for Voice Comparison Studio.
 
 Ensures all dependencies and model weights are present in backend/models/,
-removes obsolete multi-env files, preloads all 3 TTS models and all 3 metric
-evaluators in one process, and starts the studio on http://127.0.0.1:8000.
+removes obsolete multi-env files, preloads the TTS models and metric evaluators in supervised worker processes, and starts the studio on http://127.0.0.1:8000.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.request
+import http.client
 import webbrowser
 from pathlib import Path
 
@@ -91,15 +90,20 @@ def port_free(port: int) -> bool:
             return False
 
 
-def open_browser_when_ready(url: str) -> None:
+def open_browser_when_ready(port: int) -> None:
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ValueError("Invalid local server port")
     for _ in range(120):
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
         try:
-            with urllib.request.urlopen(url + "/api/health", timeout=1) as resp:
-                if resp.status == 200:
-                    webbrowser.open(url)
-                    return
-        except Exception:
+            connection.request("GET", "/api/health")
+            if connection.getresponse().status == 200:
+                webbrowser.open(f"http://127.0.0.1:{port}")
+                return
+        except (OSError, http.client.HTTPException):
             pass
+        finally:
+            connection.close()
         time.sleep(1)
 
 
@@ -168,29 +172,38 @@ def main() -> int:
         raise RuntimeError(f"Port {args.port} is already in use. Stop the existing server and retry.")
 
     sys.path.insert(0, str(BACKEND))
-    import direct_inference
     import backend as studio_backend
 
     print(f"Using unified Python environment: {sys.executable}", flush=True)
-    print("Preparing and loading all TTS models and metric evaluators...", flush=True)
-    if not args.skip_preload:
-        studio_backend._startup_preload()
-    os.environ["PRELOAD_MODELS"] = "0"  # Already preloaded in this process
+    if args.skip_preload:
+        os.environ["PRELOAD_MODELS"] = "0"
+    else:
+        os.environ.setdefault("PRELOAD_MODELS", "1")
 
     if args.verify_only:
         import tempfile
-
+        from generation_config import GenerationConfig
         ref = BACKEND / "reference/reference.wav"
         txt = (BACKEND / "reference/reference.txt").read_text(encoding="utf-8").strip()
-        evaluator = studio_backend.get_evaluator()
-        with tempfile.TemporaryDirectory(prefix="studio-verify-") as tmp:
-            for model_id in studio_backend.MODEL_IDS:
-                out = Path(tmp) / f"{model_id}.wav"
-                t0 = time.perf_counter()
-                direct_inference.generate_audio(model_id, "Hallo, dies ist ein Test der Sprachsynthese.", ref, txt, out)
-                elapsed = time.perf_counter() - t0
-                metrics = dict((k, round(v, 4)) for k, v, _ in evaluator.evaluate(str(out), str(ref), "Hallo, dies ist ein Test der Sprachsynthese.", elapsed))
-                print(f"[verify] {model_id}: generated {out.stat().st_size} bytes in {elapsed:.2f}s | metrics={metrics}", flush=True)
+        studio_backend.DATA_LOCK.acquire()
+        try:
+            with tempfile.TemporaryDirectory(prefix="studio-verify-") as tmp:
+                for model_id in studio_backend.MODEL_IDS:
+                    out = Path(tmp) / f"{model_id}.wav"
+                    _, elapsed, _ = studio_backend.WORKERS.get(model_id).call(
+                        ("Hallo, dies ist ein Test der Sprachsynthese.", str(ref), txt, str(out), "German", GenerationConfig()),
+                        timeout=float(os.getenv("GENERATION_TIMEOUT_SECONDS", "600")),
+                    )
+                    measured, errors = studio_backend.WORKERS.get("evaluation").call(
+                        (str(out), str(ref), "Hallo, dies ist ein Test der Sprachsynthese.", elapsed),
+                        timeout=float(os.getenv("EVALUATION_TIMEOUT_SECONDS", "600")),
+                    )
+                    metrics = {key: round(value,4) for key,value,_ in measured}
+                    print(f"[verify] {model_id}: {out.stat().st_size} bytes in {elapsed:.2f}s | metrics={metrics} | unavailable={list(errors)}", flush=True)
+        finally:
+            studio_backend.WORKERS.close()
+            if studio_backend.DATA_LOCK.begin_release():
+                studio_backend.DATA_LOCK.finish_release()
         return 0
 
     if not port_free(args.port):
@@ -199,7 +212,7 @@ def main() -> int:
     url = f"http://127.0.0.1:{args.port}"
     print(f"\nVoice Comparison Studio running at {url}\nPress Ctrl+C to stop.", flush=True)
     if not args.no_browser:
-        threading.Thread(target=open_browser_when_ready, args=(url,), daemon=True).start()
+        threading.Thread(target=open_browser_when_ready, args=(args.port,), daemon=True).start()
 
     import uvicorn
 
