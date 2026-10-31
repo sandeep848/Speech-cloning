@@ -873,6 +873,9 @@ def experiments(limit: int = 30):
 @app.get("/api/evaluations/{job_id}")
 def evaluations(job_id: str):
     with db() as c:
+        # Read metrics and run state from one SQLite snapshot, avoiding a
+        # completed status paired with the preceding empty metric set.
+        c.execute("BEGIN")
         security.require_owner(c, "job", job_id)
         exists = c.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
         if not exists:
