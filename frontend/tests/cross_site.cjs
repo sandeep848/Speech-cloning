@@ -39,7 +39,7 @@ const wav=Buffer.alloc(44+4800);wav.write('RIFF');wav.writeUInt32LE(wav.length-8
       if(pathname==='/api/models')body=[{id:'qwen3',name:'Qwen3-TTS',configured:true,ready:true}];
       else if(pathname==='/api/reference-profile')body={reference:{id:'reference',filename:'reference.wav'}};
       else if(pathname==='/api/workspace')body={active:['qwen3']};
-      else if(pathname.startsWith('/api/generations'))body={id:'generation',jobs:[{id:'job',model_id:'qwen3',status:'complete',audio_url:'/api/recordings/job/audio',runtime_seconds:.1}]};
+      else if(pathname.startsWith('/api/generations'))body={id:'generation',text:'A private fixture generation.',jobs:[{id:'job',model_id:'qwen3',status:'complete',audio_url:'/api/recordings/job/audio',runtime_seconds:.1}]};
       else if(pathname.startsWith('/api/evaluations'))body={metrics:[],errors:[],status:'completed'};
       return route.fulfill({headers,json:body});
     });

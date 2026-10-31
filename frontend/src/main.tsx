@@ -378,6 +378,10 @@ function App() {
           req('/api/models'),
         ]);
         if (cancelled) return;
+        if (!profile || !('reference' in profile) || !Array.isArray(available) ||
+            !available.every(model => model && typeof model.id === 'string' && typeof model.name === 'string' && typeof model.configured === 'boolean')) {
+          throw new Error('Backend API response is incompatible with this frontend');
+        }
         setReference(profile.reference);
         setModels(available);
       } catch (error) {
@@ -401,6 +405,9 @@ function App() {
       try {
         const result = await req('/api/generations/' + batchId);
         if (cancelled) return;
+        if (!result || !Array.isArray(result.jobs) || typeof result.text !== 'string') {
+          throw new Error('Backend returned an invalid generation status');
+        }
         setJobs(result.jobs);
         setText(result.text);
         if (result.jobs.some((j: Job) => ['pending', 'running'].includes(j.status))) {
