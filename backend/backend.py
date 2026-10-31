@@ -1649,7 +1649,10 @@ class BodyLimitMiddleware:
         messages, size = [], 0
         if scope["method"] not in ("GET", "HEAD", "OPTIONS"):
             while True:
-                message = await receive()
+                try:
+                    message = await asyncio.wait_for(receive(), timeout=15)
+                except TimeoutError:
+                    return await JSONResponse({'detail': 'Request body timed out'}, status_code=408)(scope, receive, send)
                 if message["type"] == "http.disconnect":
                     return
                 size += len(message.get("body", b""))

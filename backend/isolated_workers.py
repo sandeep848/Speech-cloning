@@ -90,7 +90,11 @@ class Worker:
         self.state = 'idle'
 
     def status(self):
-        alive = self.process is not None and self.process.is_alive()
+        process = self.process
+        try:
+            alive = process is not None and process.is_alive()
+        except (ValueError, OSError):
+            alive = False
         return {'state': self.state if alive else ('failed' if self.state != 'idle' else 'idle'),
                 'loaded': alive and self.state == 'ready'}
 
