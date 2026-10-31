@@ -46,7 +46,6 @@ def test_crashed_worker_recovers():
 
 
 def rpc_audio(kind, payload):
-    from pathlib import Path
     import wave
     text,reference,transcript,path,language,config=payload
     if text=='hang':

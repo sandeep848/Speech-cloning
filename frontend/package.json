@@ -6,18 +6,19 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
-    "test:responsive": "node tests/responsive.cjs"
+    "test:responsive": "node tests/responsive.cjs",
+    "test:cross-site": "node tests/cross_site.cjs"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "^4.7.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "typescript": "^5.6.3",
-    "vite": "^6.4.4"
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
-    "playwright": "^1.62.1"
+    "playwright": "^1.62.1",
+    "@vitejs/plugin-react": "^4.7.0",
+    "typescript": "^5.6.3",
+    "vite": "^6.4.4"
   }
 }

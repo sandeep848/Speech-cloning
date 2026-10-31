@@ -40,7 +40,10 @@ def plan_speech(text: str, max_chars: int = 220) -> list[SpeechChunk]:
         protected = set()
         for pattern in (
             r"(?<=\d)[.,](?=\d)",
-            r"\b(?:Dr|Prof|Mr|Mrs|Ms|Sr|Jr|bzw|ca|usw|etc|z|B|d|h)\.",
+            r"\b(?:Dr|Prof|Mr|Mrs|Ms|Sr|Jr|bzw|ca|z|B|d|h)\.",
+            r"\b(?:u\.\s*a\.|z\.\s*B\.|d\.\s*h\.|u\.\s*U\.)",
+            r"\b\d+\.(?=\s+(?:Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember|Platz|Klasse|Jahrhundert|Stock|Etage)\b)",
+            r"\b(?:usw|etc)\.(?=\s+[a-zäöüß])",
             r"\b(?:[A-Za-z]\.){2,}",
             r"\b[A-Z]\.(?=\s+[A-ZÄÖÜ])",
         ):

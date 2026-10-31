@@ -1,7 +1,6 @@
 """Security regressions use synthetic users/audio; never real inference or data."""
 import hashlib
 import io
-import os
 import secrets
 import time
 import uuid

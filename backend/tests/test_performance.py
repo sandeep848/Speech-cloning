@@ -8,7 +8,6 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import models
 from models.qwen3 import model as qwen
 
 

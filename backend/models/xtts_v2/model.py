@@ -8,11 +8,13 @@ WEIGHTS_DIR = Path(__file__).resolve().parent / "weights"
 MODEL_NAME = os.getenv("XTTS_MODEL", "tts_models/multilingual/multi-dataset/xtts_v2")
 
 _engine = None
-_latent_cache: dict[tuple[str, float], tuple[object, object]] = {}
+from models.cache import BoundedCache
+_latent_cache = BoundedCache()
 
 
 def _configure_weights_dir() -> None:
-    os.environ.setdefault("COQUI_TOS_AGREED", "1")
+    if os.getenv("COQUI_TOS_AGREED") != "1":
+        raise RuntimeError("Review the XTTS model license and explicitly set COQUI_TOS_AGREED=1 to accept it")
     tts_home = Path(os.getenv("TTS_HOME", str(WEIGHTS_DIR))).resolve()
     default_tts = (
         Path.home()

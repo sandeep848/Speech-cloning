@@ -5,6 +5,7 @@ No inference result, evaluator score or checkpoint is synthesized here.
 """
 from __future__ import annotations
 import multiprocessing as mp
+import logging
 import os
 import threading
 import time
@@ -46,17 +47,9 @@ def _perform(kind, payload):
     config_token = current.set(config)
     started = time.perf_counter()
     try:
-        if config.seed is not None:
-            import random
-            import numpy as np
-            import torch
-            random.seed(config.seed)
-            np.random.seed(config.seed)
-            torch.manual_seed(config.seed)
-            if torch.cuda.is_available():
-                torch.cuda.manual_seed_all(config.seed)
-            torch.use_deterministic_algorithms(True)
-        generate_audio(kind, text, Path(reference), transcript, Path(output))
+        from inference_context import seeded_inference
+        with seeded_inference(config.seed):
+            generate_audio(kind, text, Path(reference), transcript, Path(output))
         return str(output), time.perf_counter()-started, get_timing(output, 'first_audio_ms')
     finally:
         current.reset(config_token)
@@ -77,6 +70,7 @@ def _child(connection, kind, handler):
                 result = handler(kind, payload)
                 connection.send({'ok': True, 'result': result})
             except Exception as error:
+                logging.getLogger('studio.worker').exception('Worker operation failed kind=%s', kind)
                 # Do not serialize exception messages containing private input data.
                 connection.send({'ok': False, 'error_type': type(error).__name__})
     except (EOFError, BrokenPipeError, OSError):
@@ -93,6 +87,12 @@ class Worker:
         self.lock = threading.Lock()
         self.process = None
         self.connection = None
+        self.state = 'idle'
+
+    def status(self):
+        alive = self.process is not None and self.process.is_alive()
+        return {'state': self.state if alive else ('failed' if self.state != 'idle' else 'idle'),
+                'loaded': alive and self.state == 'ready'}
 
     def _stop(self):
         process = self.process
@@ -139,6 +139,8 @@ class Worker:
                 child.close()
                 self.connection = parent
             try:
+                started = time.monotonic()
+                self.state = 'loading' if payload is None else 'running'
                 self.connection.send(payload)
                 while True:
                     if self.abort.is_set() or (cancelled is not None and cancelled.is_set()):
@@ -150,7 +152,9 @@ class Worker:
                     if self.connection.poll(min(.1, timeout)):
                         response = self.connection.recv()
                         if not response['ok']:
+                            self.state = 'failed'
                             raise WorkerFailure('Worker failed: '+response['error_type'])
+                        self.state = 'ready'
                         return response['result']
                     if not self.process.is_alive():
                         self._stop()
@@ -178,6 +182,11 @@ class WorkerPool:
             if kind not in self.workers:
                 self.workers[kind] = Worker(kind, abort=self.abort)
             return self.workers[kind]
+
+    def status(self, kind):
+        with self.lock:
+            worker = self.workers.get(kind)
+            return worker.status() if worker else {'state': 'idle', 'loaded': False}
 
     def close(self):
         self.abort.set()

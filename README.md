@@ -1,3 +1,6 @@
+Current audit fixes and upgrade requirements: [docs/AUDIT_FIXES.md](docs/AUDIT_FIXES.md).
+Private reference files are provisioned separately using REFERENCE_DIR. No default person's voice is included.
+
 # Voice Comparison Studio
 
 Current corrections and validation superseding older findings: [hardening follow-up](docs/HARDENING_FOLLOWUP.md). Work remains on the existing branch and PR #2.

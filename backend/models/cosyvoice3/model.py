@@ -16,7 +16,8 @@ WEIGHTS_DIR = BASE_DIR / "weights"
 HF_REPO_ID = os.getenv("COSY_HF_REPO", "FunAudioLLM/Fun-CosyVoice3-0.5B-2512")
 
 _engine = None
-_spk_cache: set[str] = set()
+from collections import OrderedDict
+_spk_cache = OrderedDict()
 
 
 def _install_runtime_shims() -> None:
@@ -290,7 +291,12 @@ def synthesize(
     ).hexdigest()[:16]
     if spk_id not in _spk_cache:
         engine.add_zero_shot_spk(prompt_text, ref_str, spk_id)
-        _spk_cache.add(spk_id)
+        _spk_cache[spk_id] = True
+        while len(_spk_cache) > 16:
+            expired, _ = _spk_cache.popitem(last=False)
+            engine.frontend.spk2info.pop(expired, None)
+    else:
+        _spk_cache.move_to_end(spk_id)
 
     plan = plan_speech(clean_text)
     sentences = [item.text for item in plan]

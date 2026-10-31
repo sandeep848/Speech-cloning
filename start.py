@@ -124,7 +124,6 @@ def main() -> int:
     os.environ.setdefault("TTS_HOME", str(local_storage_base / "tts"))
     os.environ.setdefault("COSY_MODEL_DIR", str(local_storage_base / "cosyvoice3"))
     os.environ.setdefault("QWEN_MODEL_DIR", str(local_storage_base / "qwen3"))
-    os.environ.setdefault("COQUI_TOS_AGREED", "1")
     os.environ.setdefault("GENERATION_LANGUAGE", "German")
     os.environ.setdefault("ENABLE_WHISPER", "1")
     os.environ.setdefault("ENABLE_ECAPA", "1")
@@ -183,8 +182,9 @@ def main() -> int:
     if args.verify_only:
         import tempfile
         from generation_config import GenerationConfig
-        ref = BACKEND / "reference/reference.wav"
-        txt = (BACKEND / "reference/reference.txt").read_text(encoding="utf-8").strip()
+        reference_dir = Path(os.getenv('REFERENCE_DIR', str(BACKEND / 'reference')))
+        ref = reference_dir / 'reference.wav'
+        txt = (reference_dir / 'reference.txt').read_text(encoding='utf-8').strip()
         studio_backend.DATA_LOCK.acquire()
         try:
             with tempfile.TemporaryDirectory(prefix="studio-verify-") as tmp:
@@ -199,6 +199,8 @@ def main() -> int:
                         timeout=float(os.getenv("EVALUATION_TIMEOUT_SECONDS", "600")),
                     )
                     metrics = {key: round(value,4) for key,value,_ in measured}
+                    if errors:
+                        raise RuntimeError("Required evaluators unavailable: " + ", ".join(errors))
                     print(f"[verify] {model_id}: {out.stat().st_size} bytes in {elapsed:.2f}s | metrics={metrics} | unavailable={list(errors)}", flush=True)
         finally:
             studio_backend.WORKERS.close()

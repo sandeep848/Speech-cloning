@@ -10,43 +10,16 @@ MODEL_DIR = Path(__file__).resolve().parent / "weights"
 REPO_ID = os.getenv("QWEN_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-Base")
 
 _engine = None
-_prompt_cache: dict[tuple[str, float, str], object] = {}
+from models.cache import BoundedCache
+_prompt_cache = BoundedCache()
 
 
 def _resolve_weights_dir() -> str:
     env_dir = os.getenv("QWEN_MODEL_DIR")
     target = Path(env_dir).resolve() if env_dir else MODEL_DIR
 
-    if (target / "config.json").is_file():
-        return str(target)
-
-    # Check local HuggingFace cache (respecting HF_HOME)
-    hf_home = Path(os.getenv("HF_HOME", str(Path.home() / ".cache/huggingface"))).resolve()
-    for search_dir in (
-        hf_home / "hub" / f"models--{REPO_ID.replace('/', '--')}" / "snapshots",
-        Path.home() / ".cache/huggingface/hub" / f"models--{REPO_ID.replace('/', '--')}" / "snapshots",
-    ):
-        if search_dir.is_dir():
-            snapshots = sorted(
-                [p for p in search_dir.iterdir() if (p / "config.json").is_file()],
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
-            if snapshots:
-                return str(snapshots[0])
-
-    if os.getenv("APP_ENV") == "production":
-        raise RuntimeError("Provision reviewed Qwen weights before production startup")
-
-    # First-time deployment: download weights into target
-    from huggingface_hub import snapshot_download
-
-    if target.is_symlink() and not target.exists():
-        target.unlink()
-
-    target.mkdir(parents=True, exist_ok=True)
-    snapshot_download(repo_id=REPO_ID, revision=os.getenv("QWEN_REVISION", "main"), local_dir=str(target))
-    return str(target)
+    from models.weights import resolve_snapshot
+    return resolve_snapshot(REPO_ID, os.getenv('QWEN_REVISION'), target, 'Qwen')
 
 
 def load():

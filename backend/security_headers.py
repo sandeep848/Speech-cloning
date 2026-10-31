@@ -12,7 +12,8 @@ class SecurityHeaders:
             return await self.app(scope, receive, send)
         async def protected(message):
             if message['type'] == 'http.response.start':
-                headers = dict(message.get('headers', []))
+                original = message.get('headers', [])
+                headers = {}
                 headers[b'x-content-type-options'] = b'nosniff'
                 headers[b'referrer-policy'] = b'same-origin'
                 headers[b'x-frame-options'] = b'DENY'
@@ -23,6 +24,6 @@ class SecurityHeaders:
                 if os.getenv('APP_ENV') == 'production':
                     headers[b'strict-transport-security'] = b'max-age=31536000'
                     headers[b'content-security-policy'] = b"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; img-src 'self' data:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
-                message['headers'] = list(headers.items())
+                message['headers'] = [(k,v) for k,v in original if k.lower() not in headers] + list(headers.items())
             await send(message)
         await self.app(scope, receive, protected)
