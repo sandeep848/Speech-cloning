@@ -1,9 +1,16 @@
-# Replace with your domain; Caddy terminates HTTPS and proxies the complete app.
+# Replace domain; serve combined app over HTTPS. API remains bound to loopback.
 voice.example.com {
+    request_body {
+        max_size 17MB
+    }
     reverse_proxy 127.0.0.1:8000
     header {
+        Strict-Transport-Security "max-age=31536000"
         X-Content-Type-Options nosniff
         Referrer-Policy same-origin
         X-Frame-Options DENY
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+        -Server
     }
 }

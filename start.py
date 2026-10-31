@@ -21,6 +21,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 BACKEND = ROOT / "backend"
+SETUP_ALLOWED = False
+BUILD_ALLOWED = False
 
 REQUIRED_IMPORTS = {
     "fastapi": "fastapi",
@@ -44,24 +46,6 @@ REQUIRED_IMPORTS = {
 }
 
 
-def ensure_single_environment() -> None:
-    """If launched from a base Python without TTS packages, re-exec into the unified conda env if present."""
-    if (
-        importlib.util.find_spec("qwen_tts") is not None
-        and importlib.util.find_spec("TTS") is not None
-    ):
-        return
-    candidates = [
-        Path.home() / "anaconda3/envs/qwen3/bin/python",
-        Path.home() / "miniconda3/envs/qwen3/bin/python",
-        Path.home() / "anaconda3/envs/qwen3/python.exe",
-        Path.home() / "miniconda3/envs/qwen3/python.exe",
-    ]
-    for candidate in candidates:
-        if candidate.is_file() and candidate.resolve() != Path(sys.executable).resolve():
-            os.execv(str(candidate), [str(candidate), str(Path(__file__).resolve()), *sys.argv[1:]])
-
-
 def ensure_dependencies_installed() -> None:
     """On first-time deployment on a new machine, install any missing Python packages."""
     missing = [
@@ -69,6 +53,8 @@ def ensure_dependencies_installed() -> None:
         for mod, pkg in REQUIRED_IMPORTS.items()
         if importlib.util.find_spec(mod) is None
     ]
+    if missing and not SETUP_ALLOWED:
+        raise RuntimeError("Missing dependencies: " + ", ".join(missing) + ". Install the reviewed environment first, or use --setup in development.")
     if missing:
         print(f"[setup] Installing missing packages in {sys.executable}: {', '.join(missing)}", flush=True)
         subprocess.run(
@@ -87,6 +73,8 @@ def build_frontend() -> None:
         for path in sources
     ):
         return
+    if os.getenv("APP_ENV") == "production" and not BUILD_ALLOWED:
+        raise RuntimeError("Production frontend assets missing or stale. Build once with --build before startup.")
     npm = shutil.which("npm.cmd") or shutil.which("npm")
     if not npm:
         raise RuntimeError("Frontend build missing and npm not found.")
@@ -133,7 +121,6 @@ def main() -> int:
     os.environ.setdefault("COSY_MODEL_DIR", str(local_storage_base / "cosyvoice3"))
     os.environ.setdefault("QWEN_MODEL_DIR", str(local_storage_base / "qwen3"))
     os.environ.setdefault("COQUI_TOS_AGREED", "1")
-    os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
     os.environ.setdefault("GENERATION_LANGUAGE", "German")
     os.environ.setdefault("ENABLE_WHISPER", "1")
     os.environ.setdefault("ENABLE_ECAPA", "1")
@@ -142,14 +129,38 @@ def main() -> int:
     os.environ["USE_FLAX"] = "0"
     os.environ["PYTHONUNBUFFERED"] = "1"
 
-    ensure_single_environment()
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--verify-only", action="store_true", help="Preload all models/metrics and run a full synthesis + evaluation check, then exit.")
+    parser.add_argument("--setup", action="store_true", help="Explicitly install missing packages (development only)")
+    parser.add_argument("--build", action="store_true", help="Explicitly build frontend assets")
+    parser.add_argument("--skip-preload", action="store_true", help="Load engines lazily on first generation")
+    parser.add_argument("--check", action="store_true", help="Validate configuration and imports without starting models")
     args = parser.parse_args()
-
+    if not 1 <= args.port <= 65535:
+        parser.error("--port must be between 1 and 65535")
+    global SETUP_ALLOWED, BUILD_ALLOWED
+    SETUP_ALLOWED, BUILD_ALLOWED = args.setup, args.build
+    sys.path.insert(0, str(BACKEND))
+    import security
+    security.validate_configuration()
+    if security.production() and args.setup:
+        parser.error("--setup is disabled in production; prepare the reviewed environment before deployment")
+    if args.check:
+        missing = [pkg for mod,pkg in REQUIRED_IMPORTS.items() if importlib.util.find_spec(mod) is None]
+        if missing:
+            raise RuntimeError("Missing model/runtime packages: " + ", ".join(missing))
+        print("Configuration and imports verified; real model execution not tested")
+        return 0
+    if not args.verify_only and not port_free(args.port):
+        raise RuntimeError(f"Port {args.port} is occupied. Check the existing process; no process was terminated.")
+    try:
+        revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+        os.environ.setdefault("GIT_REVISION", revision)
+    except (OSError, subprocess.SubprocessError):
+        os.environ.setdefault("GIT_REVISION", "unknown")
     ensure_dependencies_installed()
     build_frontend()
 
@@ -162,7 +173,8 @@ def main() -> int:
 
     print(f"Using unified Python environment: {sys.executable}", flush=True)
     print("Preparing and loading all TTS models and metric evaluators...", flush=True)
-    studio_backend._startup_preload()
+    if not args.skip_preload:
+        studio_backend._startup_preload()
     os.environ["PRELOAD_MODELS"] = "0"  # Already preloaded in this process
 
     if args.verify_only:
