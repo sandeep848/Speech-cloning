@@ -14,7 +14,6 @@ _latent_cache: dict[tuple[str, float], tuple[object, object]] = {}
 
 def _configure_weights_dir() -> None:
     os.environ.setdefault("COQUI_TOS_AGREED", "1")
-    os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
     tts_home = Path(os.getenv("TTS_HOME", str(WEIGHTS_DIR))).resolve()
     default_tts = (
         Path.home()
@@ -90,7 +89,8 @@ def synthesize(
     speed_val = float(os.getenv("XTTS_SPEED", "1.00")) * get_speech_rate("xtts-v2")
     if not 0.5 <= speed_val <= 1.5:
         raise ValueError("Combined XTTS_SPEED and XTTS_SPEECH_RATE must be between 0.5 and 1.5")
-    temp_val = float(os.getenv("XTTS_TEMPERATURE", "0.75"))
+    from generation_config import current
+    temp_val = current.get().temperature if current.get().temperature is not None else float(os.getenv("XTTS_TEMPERATURE", "0.75"))
     rep_val = float(os.getenv("XTTS_REPETITION_PENALTY", "10.0"))
 
     for sent in sents:

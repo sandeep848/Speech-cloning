@@ -35,6 +35,9 @@ def _resolve_weights_dir() -> str:
             if snapshots:
                 return str(snapshots[0])
 
+    if os.getenv("APP_ENV") == "production":
+        raise RuntimeError("Provision reviewed Qwen weights before production startup")
+
     # First-time deployment: download weights into target
     from huggingface_hub import snapshot_download
 
@@ -42,7 +45,7 @@ def _resolve_weights_dir() -> str:
         target.unlink()
 
     target.mkdir(parents=True, exist_ok=True)
-    snapshot_download(repo_id=REPO_ID, local_dir=str(target))
+    snapshot_download(repo_id=REPO_ID, revision=os.getenv("QWEN_REVISION", "main"), local_dir=str(target))
     return str(target)
 
 
@@ -93,6 +96,8 @@ def synthesize(
         get_speech_rate,
     )
 
+    from generation_config import current
+    config = current.get()
     engine = load()
     lang = generation_language()
     ref_resolved = reference.resolve()
@@ -124,7 +129,7 @@ def synthesize(
         if not 1 <= batch_size <= 8:
             raise ValueError("QWEN_BATCH_SIZE must be between 1 and 8")
         gen_kwargs = {
-            "temperature": float(os.getenv("QWEN_TEMPERATURE", "0.6")),
+            "temperature": config.temperature if config.temperature is not None else float(os.getenv("QWEN_TEMPERATURE", "0.6")),
             "top_p": float(os.getenv("QWEN_TOP_P", "0.85")),
             "top_k": int(os.getenv("QWEN_TOP_K", "30")),
             "subtalker_temperature": float(os.getenv("QWEN_SUBTALKER_TEMP", "0.6")),

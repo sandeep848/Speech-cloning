@@ -1336,3 +1336,8 @@ select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
+
+.generation-controls { display:flex; flex-wrap:wrap; align-items:end; gap:1rem; margin-bottom:1rem; }
+.generation-controls label { display:flex; flex-direction:column; gap:.4rem; max-width:100%; }
+.generation-controls input, .generation-controls select { max-width:100%; padding:.5rem; }
+.generation-controls small { flex-basis:100%; }

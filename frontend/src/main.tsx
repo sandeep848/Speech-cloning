@@ -228,7 +228,7 @@ const PRESET_SCRIPTS_EN = [
 ];
 
 async function req(path: string, options: RequestInit = {}) {
-  const response = await fetch(API + path, { ...options, credentials: 'include' });
+  const response = await fetch(API + path, { ...options, headers: { 'X-Studio-CSRF': '1', ...options.headers }, credentials: 'include' });
   const body = await response.json().catch(() => ({ detail: response.statusText }));
   if (!response.ok) {
     if (response.status === 401 && path !== '/api/session') {
@@ -292,6 +292,8 @@ function App() {
   const [reference, setReference] = useState<ReferenceInfo | null>(null);
   const [revealed, setRevealed] = useState(false);
   const [text, setText] = useState('');
+  const [speechRate, setSpeechRate] = useState('');
+  const [temperature, setTemperature] = useState('');
   const [batchId, setBatchId] = useState(() => localStorage.getItem('voice.batch') || '');
   const [jobs, setJobs] = useState<Job[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -299,6 +301,10 @@ function App() {
   const [notice, setNotice] = useState('');
   const [loginRequired, setLoginRequired] = useState(false);
   const [token, setToken] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [authMode, setAuthMode] = useState('token');
+  useEffect(() => { req('/api/session').then(s => setAuthMode(s.auth_mode || 'token')).catch(() => {}); }, []);
   const [sessionVersion, setSessionVersion] = useState(0);
   const [rating, setRating] = useState(5);
   const [ratingJob, setRatingJob] = useState('');
@@ -420,6 +426,9 @@ function App() {
         text,
         models: eligible,
         language,
+        reference_id: reference.id,
+        speech_rate: speechRate ? Number(speechRate) : null,
+        temperature: temperature && !eligible.includes("cosyvoice3") ? Number(temperature) : null,
       });
       setJobs(result.jobs);
       setMetrics({});
@@ -753,7 +762,8 @@ function App() {
               onSubmit={async (e) => {
                 e.preventDefault();
                 try {
-                  await post('/api/session', { token });
+                  await post('/api/session', authMode === 'accounts' ? { username, password } : { token });
+                  setPassword('');
                   setToken('');
                   setLoginRequired(false);
                   setNotice('');
@@ -764,7 +774,10 @@ function App() {
               }}
             >
               <h2>Studio Authorization Required</h2>
-              <label>
+              {authMode === 'accounts' ? <>
+                <label>Username<input autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} maxLength={100} required /></label>
+                <label>Password<input type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} maxLength={1000} required /></label>
+              </> : <label>
                 Access Token
                 <input
                   type="password"
@@ -772,7 +785,7 @@ function App() {
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
                 />
-              </label>
+              </label>}
               <button className="primary" type="submit">
                 Connect Session
               </button>
@@ -809,6 +822,22 @@ function App() {
                 </div>
               </div>
 
+              <div className="generation-controls">
+                <label>Speech rate
+                  <select value={speechRate} onChange={e => setSpeechRate(e.target.value)}>
+                    <option value="">Model default</option>
+                    <option value="0.8">0.8 ×</option><option value="0.9">0.9 ×</option>
+                    <option value="1">1.0 ×</option><option value="1.1">1.1 ×</option>
+                  </select>
+                </label>
+                <label>Temperature
+                  <input type="number" min="0.1" max="1.5" step="0.05" placeholder="Model default"
+                    value={temperature} disabled={eligible.includes('cosyvoice3')}
+                    onChange={e => setTemperature(e.target.value)} />
+                </label>
+                {eligible.includes('cosyvoice3') && <small>CosyVoice has no temperature control in this adapter. Remove it to adjust temperature.</small>}
+                <button onClick={() => { setSpeechRate(''); setTemperature(''); }}>Reset controls</button>
+              </div>
               <div className="script-container">
                 <div className="script-header">
                   <label className="input-label" htmlFor="speech">
@@ -820,7 +849,7 @@ function App() {
                   id="speech"
                   value={text}
                   onChange={(e) => setText(e.target.value)}
-                  maxLength={2500}
+                  maxLength={2000}
                   placeholder={
                     language === 'English'
                       ? 'Enter English speech text to clone and benchmark across all TTS models simultaneously…'
