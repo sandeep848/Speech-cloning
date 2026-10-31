@@ -72,6 +72,9 @@ def plan_speech(text: str, max_chars: int = 220) -> list[SpeechChunk]:
 
 
 def get_speech_rate(model_id: str) -> float:
+    from generation_config import current
+    if current.get().speech_rate is not None:
+        return current.get().speech_rate
     variable = {"qwen3": "QWEN_SPEECH_RATE", "cosyvoice3": "COSY_SPEECH_RATE",
                 "xtts-v2": "XTTS_SPEECH_RATE"}[model_id]
     default = "0.92" if model_id == "qwen3" else "0.96"

@@ -1,8 +1,7 @@
 """Single-environment launcher for Voice Comparison Studio.
 
 Ensures all dependencies and model weights are present in backend/models/,
-removes obsolete multi-env files, preloads all 3 TTS models and all 3 metric
-evaluators in one process, and starts the studio on http://127.0.0.1:8000.
+removes obsolete multi-env files, preloads the TTS models and metric evaluators in supervised worker processes, and starts the studio on http://127.0.0.1:8000.
 """
 
 from __future__ import annotations
@@ -15,12 +14,14 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.request
+import http.client
 import webbrowser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 BACKEND = ROOT / "backend"
+SETUP_ALLOWED = False
+BUILD_ALLOWED = False
 
 REQUIRED_IMPORTS = {
     "fastapi": "fastapi",
@@ -44,24 +45,6 @@ REQUIRED_IMPORTS = {
 }
 
 
-def ensure_single_environment() -> None:
-    """If launched from a base Python without TTS packages, re-exec into the unified conda env if present."""
-    if (
-        importlib.util.find_spec("qwen_tts") is not None
-        and importlib.util.find_spec("TTS") is not None
-    ):
-        return
-    candidates = [
-        Path.home() / "anaconda3/envs/qwen3/bin/python",
-        Path.home() / "miniconda3/envs/qwen3/bin/python",
-        Path.home() / "anaconda3/envs/qwen3/python.exe",
-        Path.home() / "miniconda3/envs/qwen3/python.exe",
-    ]
-    for candidate in candidates:
-        if candidate.is_file() and candidate.resolve() != Path(sys.executable).resolve():
-            os.execv(str(candidate), [str(candidate), str(Path(__file__).resolve()), *sys.argv[1:]])
-
-
 def ensure_dependencies_installed() -> None:
     """On first-time deployment on a new machine, install any missing Python packages."""
     missing = [
@@ -69,6 +52,8 @@ def ensure_dependencies_installed() -> None:
         for mod, pkg in REQUIRED_IMPORTS.items()
         if importlib.util.find_spec(mod) is None
     ]
+    if missing and not SETUP_ALLOWED:
+        raise RuntimeError("Missing dependencies: " + ", ".join(missing) + ". Install the reviewed environment first, or use --setup in development.")
     if missing:
         print(f"[setup] Installing missing packages in {sys.executable}: {', '.join(missing)}", flush=True)
         subprocess.run(
@@ -87,6 +72,8 @@ def build_frontend() -> None:
         for path in sources
     ):
         return
+    if os.getenv("APP_ENV") == "production" and not BUILD_ALLOWED:
+        raise RuntimeError("Production frontend assets missing or stale. Build once with --build before startup.")
     npm = shutil.which("npm.cmd") or shutil.which("npm")
     if not npm:
         raise RuntimeError("Frontend build missing and npm not found.")
@@ -103,15 +90,20 @@ def port_free(port: int) -> bool:
             return False
 
 
-def open_browser_when_ready(url: str) -> None:
+def open_browser_when_ready(port: int) -> None:
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ValueError("Invalid local server port")
     for _ in range(120):
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
         try:
-            with urllib.request.urlopen(url + "/api/health", timeout=1) as resp:
-                if resp.status == 200:
-                    webbrowser.open(url)
-                    return
-        except Exception:
+            connection.request("GET", "/api/health")
+            if connection.getresponse().status == 200:
+                webbrowser.open(f"http://127.0.0.1:{port}")
+                return
+        except (OSError, http.client.HTTPException):
             pass
+        finally:
+            connection.close()
         time.sleep(1)
 
 
@@ -133,7 +125,6 @@ def main() -> int:
     os.environ.setdefault("COSY_MODEL_DIR", str(local_storage_base / "cosyvoice3"))
     os.environ.setdefault("QWEN_MODEL_DIR", str(local_storage_base / "qwen3"))
     os.environ.setdefault("COQUI_TOS_AGREED", "1")
-    os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
     os.environ.setdefault("GENERATION_LANGUAGE", "German")
     os.environ.setdefault("ENABLE_WHISPER", "1")
     os.environ.setdefault("ENABLE_ECAPA", "1")
@@ -142,14 +133,38 @@ def main() -> int:
     os.environ["USE_FLAX"] = "0"
     os.environ["PYTHONUNBUFFERED"] = "1"
 
-    ensure_single_environment()
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--verify-only", action="store_true", help="Preload all models/metrics and run a full synthesis + evaluation check, then exit.")
+    parser.add_argument("--setup", action="store_true", help="Explicitly install missing packages (development only)")
+    parser.add_argument("--build", action="store_true", help="Explicitly build frontend assets")
+    parser.add_argument("--skip-preload", action="store_true", help="Load engines lazily on first generation")
+    parser.add_argument("--check", action="store_true", help="Validate configuration and imports without starting models")
     args = parser.parse_args()
-
+    if not 1 <= args.port <= 65535:
+        parser.error("--port must be between 1 and 65535")
+    global SETUP_ALLOWED, BUILD_ALLOWED
+    SETUP_ALLOWED, BUILD_ALLOWED = args.setup, args.build
+    sys.path.insert(0, str(BACKEND))
+    import security
+    security.validate_configuration()
+    if security.production() and args.setup:
+        parser.error("--setup is disabled in production; prepare the reviewed environment before deployment")
+    if args.check:
+        missing = [pkg for mod,pkg in REQUIRED_IMPORTS.items() if importlib.util.find_spec(mod) is None]
+        if missing:
+            raise RuntimeError("Missing model/runtime packages: " + ", ".join(missing))
+        print("Configuration and imports verified; real model execution not tested")
+        return 0
+    if not args.verify_only and not port_free(args.port):
+        raise RuntimeError(f"Port {args.port} is occupied. Check the existing process; no process was terminated.")
+    try:
+        revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+        os.environ.setdefault("GIT_REVISION", revision)
+    except (OSError, subprocess.SubprocessError):
+        os.environ.setdefault("GIT_REVISION", "unknown")
     ensure_dependencies_installed()
     build_frontend()
 
@@ -157,28 +172,38 @@ def main() -> int:
         raise RuntimeError(f"Port {args.port} is already in use. Stop the existing server and retry.")
 
     sys.path.insert(0, str(BACKEND))
-    import direct_inference
     import backend as studio_backend
 
     print(f"Using unified Python environment: {sys.executable}", flush=True)
-    print("Preparing and loading all TTS models and metric evaluators...", flush=True)
-    studio_backend._startup_preload()
-    os.environ["PRELOAD_MODELS"] = "0"  # Already preloaded in this process
+    if args.skip_preload:
+        os.environ["PRELOAD_MODELS"] = "0"
+    else:
+        os.environ.setdefault("PRELOAD_MODELS", "1")
 
     if args.verify_only:
         import tempfile
-
+        from generation_config import GenerationConfig
         ref = BACKEND / "reference/reference.wav"
         txt = (BACKEND / "reference/reference.txt").read_text(encoding="utf-8").strip()
-        evaluator = studio_backend.get_evaluator()
-        with tempfile.TemporaryDirectory(prefix="studio-verify-") as tmp:
-            for model_id in studio_backend.MODEL_IDS:
-                out = Path(tmp) / f"{model_id}.wav"
-                t0 = time.perf_counter()
-                direct_inference.generate_audio(model_id, "Hallo, dies ist ein Test der Sprachsynthese.", ref, txt, out)
-                elapsed = time.perf_counter() - t0
-                metrics = dict((k, round(v, 4)) for k, v, _ in evaluator.evaluate(str(out), str(ref), "Hallo, dies ist ein Test der Sprachsynthese.", elapsed))
-                print(f"[verify] {model_id}: generated {out.stat().st_size} bytes in {elapsed:.2f}s | metrics={metrics}", flush=True)
+        studio_backend.DATA_LOCK.acquire()
+        try:
+            with tempfile.TemporaryDirectory(prefix="studio-verify-") as tmp:
+                for model_id in studio_backend.MODEL_IDS:
+                    out = Path(tmp) / f"{model_id}.wav"
+                    _, elapsed, _ = studio_backend.WORKERS.get(model_id).call(
+                        ("Hallo, dies ist ein Test der Sprachsynthese.", str(ref), txt, str(out), "German", GenerationConfig()),
+                        timeout=float(os.getenv("GENERATION_TIMEOUT_SECONDS", "600")),
+                    )
+                    measured, errors = studio_backend.WORKERS.get("evaluation").call(
+                        (str(out), str(ref), "Hallo, dies ist ein Test der Sprachsynthese.", elapsed),
+                        timeout=float(os.getenv("EVALUATION_TIMEOUT_SECONDS", "600")),
+                    )
+                    metrics = {key: round(value,4) for key,value,_ in measured}
+                    print(f"[verify] {model_id}: {out.stat().st_size} bytes in {elapsed:.2f}s | metrics={metrics} | unavailable={list(errors)}", flush=True)
+        finally:
+            studio_backend.WORKERS.close()
+            if studio_backend.DATA_LOCK.begin_release():
+                studio_backend.DATA_LOCK.finish_release()
         return 0
 
     if not port_free(args.port):
@@ -187,7 +212,7 @@ def main() -> int:
     url = f"http://127.0.0.1:{args.port}"
     print(f"\nVoice Comparison Studio running at {url}\nPress Ctrl+C to stop.", flush=True)
     if not args.no_browser:
-        threading.Thread(target=open_browser_when_ready, args=(url,), daemon=True).start()
+        threading.Thread(target=open_browser_when_ready, args=(args.port,), daemon=True).start()
 
     import uvicorn
 

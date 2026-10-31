@@ -1,0 +1,14 @@
+# Configure recipient and off-host copy before enabling the timer.
+[Unit]
+Description=Encrypted Voice Studio database and audio backup
+OnFailure=voice-studio-backup-alert.service
+[Service]
+Type=oneshot
+User=voice-studio
+UMask=0077
+EnvironmentFile=/srv/voice-studio/backend/.env
+ExecStart=/srv/voice-studio/.venv/bin/python /srv/voice-studio/backend/daily_backup.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/srv/voice-studio/backups

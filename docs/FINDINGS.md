@@ -1,0 +1,15 @@
+# Finding locations
+
+Baseline links are immutable. Candidate ranges refer to this branch before the documentation commit. Root cause, reproduction and residual risks are expanded in IMPLEMENTATION_REPORT.md.
+
+| Severity | Original location | Candidate location | Root cause | Regression / evidence |
+|---|---|---|---|---|
+| High | [authenticated, lines 989–1004](https://github.com/sandeep848/Speech-cloning/blob/1e5b70d3b9497395ce53b94b640dfd25102f0587/backend/backend.py#L989-L1004) | backend/backend.py, protect_api, lines 1237–1281 | Missing token accepted private requests | test_missing_credentials_fail_closed |
+| High | [upload_reference, lines 349–371](https://github.com/sandeep848/Speech-cloning/blob/1e5b70d3b9497395ce53b94b640dfd25102f0587/backend/backend.py#L349-L371) | backend/backend.py, upload_reference, lines 410–449 | Mutable shared recording and unbounded/unverified upload | test_two_users_all_resources_isolated |
+| High | [batch, lines 691–714](https://github.com/sandeep848/Speech-cloning/blob/1e5b70d3b9497395ce53b94b640dfd25102f0587/backend/backend.py#L691-L714) | backend/backend.py, batch, lines 824–848 | No object owner validation | test_two_users_all_resources_isolated |
+| High | [recording, lines 718–725](https://github.com/sandeep848/Speech-cloning/blob/1e5b70d3b9497395ce53b94b640dfd25102f0587/backend/backend.py#L718-L725) | backend/backend.py, recording, lines 852–860 | No private download ownership validation | test_two_users_all_resources_isolated |
+| Medium | [login, lines 1012–1028](https://github.com/sandeep848/Speech-cloning/blob/1e5b70d3b9497395ce53b94b640dfd25102f0587/backend/backend.py#L1012-L1028) | backend/backend.py, login, lines 1161–1178 | Replayable timestamp cookie and no abuse limits | test_rotation_expiry_tampering_and_logout |
+| Medium | [protect_api, lines 1039–1055](https://github.com/sandeep848/Speech-cloning/blob/1e5b70d3b9497395ce53b94b640dfd25102f0587/backend/backend.py#L1039-L1055) | backend/backend.py, protect_api, lines 1237–1281 | Cookie mutations lacked explicit CSRF header defense | test_csrf_rate_limit_and_bad_inputs |
+| Medium | [export_batch, lines 930–980](https://github.com/sandeep848/Speech-cloning/blob/1e5b70d3b9497395ce53b94b640dfd25102f0587/backend/backend.py#L930-L980) | backend/backend.py, export_batch, lines 1099–1151 | CSV formula-leading generation text exported verbatim | csv_safe helper; manual code review |
+| Medium | [evaluations, lines 739–760](https://github.com/sandeep848/Speech-cloning/blob/1e5b70d3b9497395ce53b94b640dfd25102f0587/backend/backend.py#L739-L760) | backend/backend.py, evaluations, lines 874–899 | Separate reads could pair old metrics with newly completed state | test_evaluation_saved_and_deduplicated |
+| Medium | [run_job, lines 522–547](https://github.com/sandeep848/Speech-cloning/blob/1e5b70d3b9497395ce53b94b640dfd25102f0587/backend/backend.py#L522-L547) | backend/backend.py, run_job, lines 615–642 | Underlying errors were returned to clients | generic job error path; code review |
