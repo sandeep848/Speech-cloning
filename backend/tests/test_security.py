@@ -57,6 +57,7 @@ def test_missing_credentials_fail_closed(monkeypatch):
 
 def test_production_configuration(monkeypatch):
     monkeypatch.setenv('APP_ENV', 'production')
+    monkeypatch.setenv('INFERENCE_ISOLATION', 'process')
     monkeypatch.setenv('DEV_ALLOW_ANONYMOUS', '0')
     monkeypatch.setenv('COOKIE_SECURE', '1')
     monkeypatch.setenv('CORS_ORIGINS', 'https://studio.test')
@@ -205,6 +206,9 @@ def test_request_controls_cache_provenance_and_download(accounts, monkeypatch):
     provenance=json.loads(metadata['jobs'][0]['configuration'])
     assert provenance['speech_rate']==.9 and provenance['temperature']==.65
     assert len(calls)==before
+    assert not list((backend.ROOT/'exports').glob('*.zip'))
+    with backend.db() as c:
+        assert c.execute("SELECT count(*) FROM storage_reservations WHERE id LIKE 'export:%'").fetchone()[0]==0
 
 
 def test_concurrent_admission_never_exceeds_capacity(accounts,monkeypatch):
@@ -240,3 +244,172 @@ def test_failed_batch_planning_never_starts_inference(accounts,monkeypatch):
     assert calls==[]
     with backend.db() as c:
         assert c.execute('SELECT count(*) FROM batches').fetchone()[0]==before
+
+
+def test_explicit_reference_pins_its_original_transcript(accounts, monkeypatch):
+    a,_,_=accounts
+    monkeypatch.setattr(backend.direct_inference,'model_availability',lambda _: {'configured':True})
+    seen=[]
+    def synthesize(model,text,ref,transcript,path):
+        seen.append(transcript);path.write_bytes(audio())
+    monkeypatch.setattr(backend.direct_inference,'generate_audio',synthesize)
+    first=a.post('/api/references/upload',files={'file':('x.wav',audio(),'audio/wav')},data={'transcript':'Original transcript','language':'English'})
+    ref=first.json()['reference']['id']
+    assert first.json()['language']=='English'
+    a.post('/api/references/upload',files={'file':('x.wav',audio(),'audio/wav')},data={'transcript':'Replacement transcript','language':'English'})
+    result=a.post('/api/generations',json={'text':'Test','reference_id':ref,'language':'English','models':['cosyvoice3']})
+    assert result.status_code==202,result.text
+    for _ in range(100):
+        if a.get('/api/generations/'+result.json()['id']).json()['jobs'][0]['status']=='complete':break
+        time.sleep(.01)
+    assert seen==['Original transcript']
+
+
+def test_storage_byte_limits_are_atomic(accounts, monkeypatch):
+    a,_,_=accounts
+    monkeypatch.setenv('MAX_USER_STORAGE_BYTES','1')
+    before=a.get('/api/reference-profile').json()['reference']['id']
+    denied=a.post('/api/references/upload',files={'file':('x.wav',audio(),'audio/wav')})
+    assert denied.status_code==429
+    assert a.get('/api/reference-profile').json()['reference']['id']==before
+    monkeypatch.setattr(backend.direct_inference,'model_availability',lambda _: {'configured':True})
+    with backend.db() as c:
+        count=c.execute('SELECT count(*) FROM jobs').fetchone()[0]
+    denied=a.post('/api/generations',json={'text':'No capacity','models':['qwen3']})
+    assert denied.status_code==429
+    with backend.db() as c:
+        assert c.execute('SELECT count(*) FROM jobs').fetchone()[0]==count
+        assert c.execute('SELECT count(*) FROM storage_reservations').fetchone()[0]==0
+
+
+def test_login_limits_survive_limiter_recreation():
+    fresh=security.RateLimiter();fresh.bind(backend.DB)
+    assert fresh.allow(('persisted','account'),1,300)
+    restarted=security.RateLimiter();restarted.bind(backend.DB)
+    assert not restarted.allow(('persisted','account'),1,300)
+
+
+def test_actual_process_timeout_and_owned_cancellation(accounts, monkeypatch):
+    from isolated_workers import WorkerPool, Worker
+    from test_workers import rpc_audio
+    a,b,_=accounts
+    pool=WorkerPool()
+    pool.workers['qwen3']=Worker('qwen3',rpc_audio,abort=pool.abort)
+    monkeypatch.setattr(backend,'WORKERS',pool)
+    monkeypatch.setenv('INFERENCE_ISOLATION','process')
+    monkeypatch.setenv('GENERATION_TIMEOUT_SECONDS','0.5')
+    monkeypatch.setattr(backend.direct_inference,'model_availability',lambda _: {'configured':True})
+    def start(text):
+        r=a.post('/api/generations',json={'text':text,'models':['qwen3'],'use_cache':False})
+        assert r.status_code==202,r.text
+        return r.json()
+    def state(generation):
+        return a.get('/api/generations/'+generation['id']).json()['jobs'][0]
+    try:
+        timed=start('hang')
+        for _ in range(300):
+            if state(timed)['status']=='failed':break
+            time.sleep(.01)
+        assert state(timed)['status']=='failed'
+        assert pool.workers['qwen3'].process is None
+        monkeypatch.setenv('GENERATION_TIMEOUT_SECONDS','10')
+        cancelled=start('hang');job=cancelled['jobs'][0]['id']
+        assert b.delete('/api/jobs/'+job).status_code==404
+        assert a.delete('/api/jobs/'+job).status_code==200
+        assert state(cancelled)['status']=='cancelled'
+        assert pool.workers['qwen3'].process is None
+        recovered=start('success')
+        for _ in range(300):
+            if state(recovered)['status']=='complete':break
+            time.sleep(.01)
+        assert state(recovered)['status']=='complete'
+        with backend.db() as c:
+            assert c.execute('SELECT count(*) FROM storage_reservations').fetchone()[0]==0
+    finally:
+        pool.close()
+
+
+def test_comparison_model_settings_remain_independent(accounts, monkeypatch):
+    from generation_config import current
+    a,_,_=accounts
+    monkeypatch.setattr(backend.direct_inference,'model_availability',lambda _: {'configured':True})
+    seen={}
+    def synthesize(model,text,ref,transcript,path):
+        seen[model]=current.get();path.write_bytes(audio())
+    monkeypatch.setattr(backend.direct_inference,'generate_audio',synthesize)
+    result=a.post('/api/generations',json={'text':'Per-model controls','models':list(backend.MODEL_IDS),'model_settings':{'qwen3':{'temperature':.4},'xtts-v2':{'temperature':.9,'speech_rate':1.1}}})
+    assert result.status_code==202,result.text
+    for _ in range(100):
+        jobs=a.get('/api/generations/'+result.json()['id']).json()['jobs']
+        if all(job['status']=='complete' for job in jobs):break
+        time.sleep(.01)
+    assert seen['qwen3'].temperature==.4
+    assert seen['xtts-v2'].temperature==.9 and seen['xtts-v2'].speech_rate==1.1
+    assert seen['cosyvoice3'].temperature is None
+
+
+def test_bad_tokens_and_validation_never_echo_secrets(monkeypatch):
+    monkeypatch.setenv('API_TOKEN','valid-token')
+    with TestClient(backend.app) as api:
+        assert api.post('/api/session',json={'token':'悪いトークン'}).status_code==401
+        private='never-echo-this-secret-'*100
+        response=api.post('/api/session',json={'password':private})
+        assert response.status_code==422
+        assert private not in response.text and '"input"' not in response.text
+
+
+def test_non_admin_cannot_read_security_events(accounts,monkeypatch):
+    a,_,_=accounts
+    monkeypatch.setenv('ADMIN_TOKEN','administrator-secret')
+    assert a.get('/api/admin/security-events',headers={'Authorization':'Bearer administrator-secret'}).status_code==403
+
+
+def test_explicit_browser_session_works_without_cookies(monkeypatch):
+    monkeypatch.setenv('API_TOKEN','browser-login-token')
+    with TestClient(backend.app) as api:
+        cookie_login=api.post('/api/session',json={'token':'browser-login-token'})
+        assert 'session_token' not in cookie_login.json()
+        bearer=api.post('/api/session',json={'token':'browser-login-token','transport':'bearer'},headers={'X-Studio-CSRF':'1'})
+        secret=bearer.json()['session_token'];api.cookies.clear()
+        headers={'Authorization':'Session '+secret}
+        assert api.get('/api/models',headers=headers).status_code==200
+        assert api.patch('/api/workspace',json={'active':[]},headers=headers).status_code==200
+        assert api.delete('/api/session',headers=headers).status_code==200
+        assert api.get('/api/models',headers=headers).status_code==401
+
+
+def test_security_headers_cover_unauthorized_and_oversized_responses(monkeypatch):
+    monkeypatch.setenv('API_TOKEN','headers-test-token')
+    with TestClient(backend.app) as api:
+        for response in [api.get('/api/models'),api.post('/api/generations',content=b'x'*(256*1024+1))]:
+            assert response.status_code in (401,413)
+            assert response.headers['cache-control']=='no-store'
+            assert response.headers['x-content-type-options']=='nosniff'
+            assert 'x-request-id' in response.headers
+
+
+def test_legacy_profile_does_not_disclose_unowned_transcript(accounts, monkeypatch, tmp_path):
+    a,_,_=accounts
+    monkeypatch.setattr(backend,'REFERENCE_DIR',tmp_path)
+    identifier='quarantined-'+str(uuid.uuid4())
+    target=backend.ROOT/'audio'/(identifier+'.wav');target.write_bytes(audio())
+    with backend.db() as c:
+        c.execute('INSERT INTO references_audio VALUES (?,?,?,?,?)',(identifier,'legacy-hash','private.wav',str(target),time.time()))
+        old=c.execute('SELECT * FROM reference_profiles WHERE id=1').fetchone()
+        c.execute('INSERT OR REPLACE INTO reference_profiles VALUES (1,?,?,?)',(identifier,'legacy private transcript',time.time()))
+    try:
+        response=a.get('/api/reference-profile')
+        assert response.status_code==200 and response.json()['reference'] is None
+        assert 'legacy private transcript' not in response.text
+    finally:
+        with backend.db() as c:
+            if old:c.execute('INSERT OR REPLACE INTO reference_profiles VALUES (?,?,?,?)',tuple(old))
+            else:c.execute('DELETE FROM reference_profiles WHERE id=1')
+            c.execute('DELETE FROM references_audio WHERE id=?',(identifier,))
+        target.unlink()
+
+
+def test_untrusted_owner_fields_and_coerced_ratings_are_rejected(accounts):
+    a,_,_=accounts
+    assert a.post('/api/generations',json={'text':'test','models':['qwen3'],'owner_id':'another-user'}).status_code==422
+    assert a.post('/api/ratings',json={'job_id':'unknown','category':'naturalness','rating':True}).status_code==422

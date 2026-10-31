@@ -9,12 +9,12 @@ from contextvars import ContextVar
 import hashlib
 import hmac
 import os
+import json
+import logging
 import secrets
 import sqlite3
 import threading
 import time
-from collections import OrderedDict
-from pathlib import Path
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError, InvalidHashError
@@ -24,6 +24,7 @@ principal = ContextVar('studio_principal', default=None)
 passwords = PasswordHasher()  # Argon2id with independent random salts.
 DUMMY_HASH = passwords.hash(secrets.token_urlsafe(32))
 SESSION_SECONDS = 3600
+PASSWORD_SLOTS = threading.BoundedSemaphore(4)
 
 
 def production():
@@ -34,7 +35,22 @@ def validate_configuration():
     mode = os.getenv('APP_ENV', 'development')
     if mode not in ('development', 'production', 'test'):
         raise RuntimeError('APP_ENV must be development, production or test')
+    if os.getenv('INFERENCE_ISOLATION', 'process') not in ('process', 'thread'):
+        raise RuntimeError('INFERENCE_ISOLATION must be process or thread')
+    ranges = {'MAX_PENDING_JOBS': (1,128), 'MAX_USER_JOBS': (1,128),
+              'MAX_OUTPUT_BYTES': (1024,536870912), 'MAX_OUTPUT_SECONDS': (1,3600),
+              'GENERATION_TIMEOUT_SECONDS': (0.1,3600), 'EVALUATION_TIMEOUT_SECONDS': (0.1,3600)}
+    for name,(low,high) in ranges.items():
+        if name in os.environ:
+            try:
+                value=float(os.environ[name])
+            except ValueError:
+                raise RuntimeError(name+' must be numeric') from None
+            if not low <= value <= high:
+                raise RuntimeError(name+' is outside the supported range')
     if production():
+        if os.getenv('INFERENCE_ISOLATION', 'process') != 'process':
+            raise RuntimeError('Production requires process-isolated inference')
         if os.getenv('DEV_ALLOW_ANONYMOUS') == '1':
             raise RuntimeError('Anonymous development access is forbidden in production')
         if os.getenv('COOKIE_SECURE') != '1':
@@ -85,6 +101,14 @@ def initialize(connection):
         reference_id TEXT NOT NULL REFERENCES references_audio(id),
         transcript TEXT NOT NULL, PRIMARY KEY(owner_id, language)
     );
+    CREATE TABLE IF NOT EXISTS rate_limits (
+        key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires REAL NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS rate_limits_expiry ON rate_limits(expires);
+    CREATE TABLE IF NOT EXISTS security_events (
+        id INTEGER PRIMARY KEY, created REAL NOT NULL, kind TEXT NOT NULL,
+        request_id TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied REAL NOT NULL);
     INSERT OR IGNORE INTO schema_migrations VALUES (1, strftime('%s','now'));
     ''')
@@ -122,17 +146,24 @@ def version(connection, user):
     return hashlib.sha256(f"{os.getenv('AUTH_EPOCH', '')}:{row['credential_version']}".encode()).hexdigest()
 
 
+def session_value(request):
+    authorization = request.headers.get('authorization', '')
+    if authorization.startswith('Session '):
+        return authorization[8:]
+    return request.cookies.get('studio_session', '')
+
+
 def identify(request, connection):
     token = os.getenv('API_TOKEN', '') if os.getenv('AUTH_MODE', 'token') == 'token' else ''
-    if token and hmac.compare_digest(request.headers.get('authorization', ''), 'Bearer ' + token):
+    if token and hmac.compare_digest(request.headers.get('authorization', '').encode(), ('Bearer ' + token).encode()):
         return 'legacy', False
-    cookie = request.cookies.get('studio_session', '')
+    cookie = session_value(request)
     if cookie:
         row = connection.execute('SELECT * FROM sessions WHERE digest=?', (hashlib.sha256(cookie.encode()).hexdigest(),)).fetchone()
         if row and row['expires'] > time.time():
             current = version(connection, row['owner_id'])
             if current and hmac.compare_digest(row['credential'], current):
-                return row['owner_id'], True
+                return row['owner_id'], not request.headers.get('authorization', '').startswith('Session ')
     if os.getenv('AUTH_MODE', 'token') == 'token' and not token and not production() and os.getenv('DEV_ALLOW_ANONYMOUS') == '1':
         return 'development', False
     return None, False
@@ -142,41 +173,67 @@ def authenticate(connection, token='', username='', password=''):
     user = None
     if os.getenv('AUTH_MODE', 'token') == 'token':
         expected = os.getenv('API_TOKEN', '')
-        if expected and hmac.compare_digest(token, expected):
+        if expected and hmac.compare_digest(token.encode(), expected.encode()):
             user = 'legacy'
     else:
         row = connection.execute('SELECT * FROM accounts WHERE username=?', (username.casefold().strip(),)).fetchone()
+        if not PASSWORD_SLOTS.acquire(blocking=False):
+            raise HTTPException(429, 'Authentication capacity reached; retry later')
         try:
-            valid = passwords.verify(row['password_hash'] if row else DUMMY_HASH, password)
-        except (VerificationError, InvalidHashError):
-            valid = False
+            try:
+                valid = passwords.verify(row['password_hash'] if row else DUMMY_HASH, password)
+            except (VerificationError, InvalidHashError):
+                valid = False
+        finally:
+            PASSWORD_SLOTS.release()
         if row and valid and not row['disabled']:
             user = row['id']
     if user is None:
         raise HTTPException(401, 'Invalid credentials')
     cookie = secrets.token_urlsafe(48)
     connection.execute('DELETE FROM sessions WHERE expires <= ?', (time.time(),))
+    connection.execute('DELETE FROM sessions WHERE digest IN (SELECT digest FROM sessions WHERE owner_id=? ORDER BY expires DESC LIMIT -1 OFFSET 9)', (user,))
     connection.execute('INSERT INTO sessions VALUES (?,?,?,?)',
                        (hashlib.sha256(cookie.encode()).hexdigest(), user, time.time()+SESSION_SECONDS, version(connection, user)))
     return cookie
 
 
 class RateLimiter:
-    """Bounded per-process buckets; deployment is explicitly one worker."""
+    """Atomic SQLite limits survive service restarts; keys are privacy hashes."""
     def __init__(self):
-        self.buckets = OrderedDict()
-        self.lock = threading.Lock()
+        self.database = None
+
+    def bind(self, database):
+        self.database = database
+
+    def clear(self):
+        if self.database is not None:
+            with sqlite3.connect(self.database) as c:
+                c.execute('DELETE FROM rate_limits')
 
     def allow(self, key, maximum, seconds=60):
-        now = time.monotonic()
-        with self.lock:
-            count, until = self.buckets.pop(key, (0, now + seconds))
-            if until <= now:
-                count, until = 0, now + seconds
-            self.buckets[key] = (count + 1, until)
-            while len(self.buckets) > 10000:
-                self.buckets.popitem(last=False)
-            return count < maximum
+        if self.database is None:
+            raise RuntimeError('Rate limiter database is not initialized')
+        digest = hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()
+        now = time.time()
+        try:
+            with sqlite3.connect(self.database, timeout=5) as c:
+                c.execute('BEGIN IMMEDIATE')
+                c.execute('DELETE FROM rate_limits WHERE expires<=?', (now,))
+                existing = c.execute('SELECT count FROM rate_limits WHERE key=?', (digest,)).fetchone()
+                if not existing and c.execute('SELECT count(*) FROM rate_limits').fetchone()[0] >= 10000:
+                    return False
+                row = c.execute('INSERT INTO rate_limits VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET count=count+1 RETURNING count', (digest, 1, now+seconds)).fetchone()
+                return row[0] <= maximum
+        except sqlite3.Error:
+            logging.getLogger('studio').error('Rate limit storage unavailable')
+            return False
+
+
+def event(connection, kind, request_id):
+    connection.execute('INSERT INTO security_events(created,kind,request_id) VALUES (?,?,?)',
+                       (time.time(), kind, request_id))
+    connection.execute('DELETE FROM security_events WHERE id <= (SELECT COALESCE(max(id),0)-10000 FROM security_events)')
 
 
 limiter = RateLimiter()

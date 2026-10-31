@@ -250,7 +250,11 @@ def test_batch_trials_bypass_cache_and_track_children(monkeypatch):
 
     async def fake_generate(request, deferred=None):
         calls.append(request)
-        return {"id": "trial-" + str(len(calls)), "jobs": []}
+        identifier = "trial-" + str(len(calls))
+        with backend.db() as c:
+            c.execute("INSERT INTO batches VALUES (?,?,?,?)", (identifier, request.text, request.reference_id, time.time()))
+            backend.security.claim(c, "generation", identifier)
+        return {"id": identifier, "jobs": []}
 
     monkeypatch.setattr(backend, "_generate_impl", fake_generate)
     monkeypatch.setattr(backend, "_batch_generations", lambda batch_id: ["tracked"])

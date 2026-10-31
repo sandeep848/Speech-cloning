@@ -55,8 +55,13 @@ def main():
                 print('One-use reset token (expires in 15 minutes):', token)
             elif args.action == 'claim-legacy':
                 # Explicit offline migration to one named owner; never infer owners.
-                for table,kind in [('references_audio','reference'),('batches','generation'),('jobs','job'),('batch_runs','batch')]:
-                    c.execute(f'INSERT OR IGNORE INTO resource_owners SELECT ?,id,? FROM {table}', (kind,row['id']))
+                for kind,statement in (
+                    ('reference','INSERT OR IGNORE INTO resource_owners SELECT ?,id,? FROM references_audio'),
+                    ('generation','INSERT OR IGNORE INTO resource_owners SELECT ?,id,? FROM batches'),
+                    ('job','INSERT OR IGNORE INTO resource_owners SELECT ?,id,? FROM jobs'),
+                    ('batch','INSERT OR IGNORE INTO resource_owners SELECT ?,id,? FROM batch_runs'),
+                ):
+                    c.execute(statement, (kind,row['id']))
             else:
                 c.execute('UPDATE accounts SET credential_version=credential_version+1,disabled=? WHERE id=?',
                           (1 if args.action=='disable' else row['disabled'],row['id']))

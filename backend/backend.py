@@ -13,10 +13,12 @@ import os
 import shutil
 import sqlite3
 import threading
+import tempfile
 import time
 import uuid
 import wave
 import zipfile
+from typing import Literal
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
@@ -24,15 +26,22 @@ from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 load_dotenv(Path(__file__).parent / ".env", override=False)
 
 import direct_inference
 import security
-from generation_config import GenerationConfig, current as generation_config
+import schema
+import artifact_storage
+from generation_config import GenerationConfig, current as generation_config, effective_parameters
+from isolated_workers import WorkerPool, InferenceCancelled
+from export_response import PrivateExportResponse
+from security_headers import SecurityHeaders
+from runtime_lock import DataLock
 
 logger = logging.getLogger("studio")
 
@@ -47,6 +56,7 @@ if ROOT.is_relative_to((Path(__file__).resolve().parents[1] / "frontend").resolv
 ROOT.mkdir(parents=True, exist_ok=True)
 (ROOT / "audio").mkdir(exist_ok=True)
 DB = ROOT / "studio.sqlite3"
+DATA_LOCK = DataLock(ROOT / "runtime.lock")
 if security.production():
     ROOT.chmod(0o700)
     (ROOT / "audio").chmod(0o700)
@@ -61,12 +71,19 @@ ORIGINS = [
 MODEL_IDS = ("qwen3", "cosyvoice3", "xtts-v2")
 LABELS = {"qwen3": "Qwen3-TTS", "cosyvoice3": "CosyVoice 3", "xtts-v2": "XTTS-v2"}
 POOL = ThreadPoolExecutor(max_workers=3, thread_name_prefix="inference")
+EXPORT_SLOTS = threading.BoundedSemaphore(2)
 EVAL_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="evaluation")
 MODEL_LOCKS = {model: asyncio.Lock() for model in MODEL_IDS}
 MAX_PENDING = int(os.getenv("MAX_PENDING_JOBS", "12"))
 TASKS: dict[str, asyncio.Task] = {}
 ADMISSION_LOCK = asyncio.Lock()
 REPRODUCIBILITY_LOCK = threading.Lock()
+WORKERS = WorkerPool()
+JOB_CANCELLATIONS = {}
+
+
+def process_isolation():
+    return os.getenv("INFERENCE_ISOLATION", "process") == "process"
 
 _evaluator = None
 _evaluator_lock = threading.Lock()
@@ -85,6 +102,13 @@ def get_evaluator():
 
 
 def _startup_preload():
+    if process_isolation():
+        for model in (*MODEL_IDS, "evaluation"):
+            try:
+                WORKERS.get(model).call(None, timeout=float(os.getenv("MODEL_LOAD_TIMEOUT", "600")))
+            except Exception:
+                logger.warning("Preload unavailable model=%s", model)
+        return
     direct_inference.preload_all_models()
     try:
         print("[evaluator] Loading Whisper, SpeechBrain ECAPA, and ScoreQ...", flush=True)
@@ -96,15 +120,30 @@ def _startup_preload():
 
 @asynccontextmanager
 async def lifespan(app):
+    global WORKERS
+    if WORKERS.abort.is_set():
+        WORKERS = WorkerPool()
     security.validate_configuration()
-    load_backend_reference()
-    if os.getenv("PRELOAD_MODELS", "1") == "1":
-        threading.Thread(target=_startup_preload, daemon=True).start()
-    yield
-    for task in list(TASKS.values()):
-        task.cancel()
-    if TASKS:
-        await asyncio.gather(*list(TASKS.values()), return_exceptions=True)
+    with db() as c:
+        if security.production() and schema.missing_constraints(c):
+            raise RuntimeError("Legacy database requires offline schema.py --apply migration after a verified backup")
+    primary = DATA_LOCK.acquire()
+    try:
+        if primary:
+            load_backend_reference()
+        if primary and os.getenv("PRELOAD_MODELS", "1") == "1":
+            threading.Thread(target=_startup_preload, daemon=True).start()
+        yield
+    finally:
+        if DATA_LOCK.begin_release():
+            try:
+                for task in list(TASKS.values()):
+                    task.cancel()
+                if TASKS:
+                    await asyncio.gather(*list(TASKS.values()), return_exceptions=True)
+                await asyncio.to_thread(WORKERS.close)
+            finally:
+                DATA_LOCK.finish_release()
 
 
 app = FastAPI(title="Voice Comparison Studio", version="1.1.0", lifespan=lifespan,
@@ -112,6 +151,15 @@ app = FastAPI(title="Voice Comparison Studio", version="1.1.0", lifespan=lifespa
               redoc_url=None if security.production() else "/redoc",
               openapi_url=None if security.production() else "/openapi.json")
 
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request, error):
+    # Pydantic input values can contain passwords/tokens; never echo them.
+    return JSONResponse({"detail": "Invalid request", "errors": [
+        {"field": ".".join(str(part) for part in item["loc"]), "message": item["msg"]}
+        for item in error.errors()
+    ]}, status_code=422)
 
 
 @contextmanager
@@ -127,45 +175,18 @@ def db():
 
 
 with db() as c:
-    c.execute(
-        "CREATE TABLE IF NOT EXISTS references_audio (id TEXT PRIMARY KEY, sha256 TEXT, filename TEXT, path TEXT, created REAL)"
-    )
-    c.execute(
-        "CREATE TABLE IF NOT EXISTS batches (id TEXT PRIMARY KEY, text TEXT, reference_id TEXT, created REAL)"
-    )
-    c.execute(
-        "CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, batch_id TEXT, model_id TEXT, status TEXT, output TEXT, error TEXT, created REAL, updated REAL, cache_key TEXT)"
-    )
-    c.execute(
-        "CREATE TABLE IF NOT EXISTS metrics (job_id TEXT, name TEXT, value REAL, evaluator TEXT, PRIMARY KEY(job_id,name))"
-    )
-    c.execute(
-        "CREATE TABLE IF NOT EXISTS evaluation_runs (job_id TEXT PRIMARY KEY, status TEXT, error TEXT, updated REAL)"
-    )
-    for column in ("started_at", "runtime_seconds"):
-        existing_columns = {r["name"] for r in c.execute("PRAGMA table_info(jobs)")}
-        if column not in existing_columns:
-            c.execute(f"ALTER TABLE jobs ADD COLUMN {column} REAL")
-    c.execute(
-        "CREATE TABLE IF NOT EXISTS reference_profiles (id INTEGER PRIMARY KEY CHECK(id=1), reference_id TEXT, transcript TEXT NOT NULL DEFAULT '', updated REAL)"
-    )
-    c.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
-    c.execute(
-        "CREATE TABLE IF NOT EXISTS human_ratings (job_id TEXT, rater TEXT, category TEXT, rating INTEGER, PRIMARY KEY(job_id,rater,category))"
-    )
-    c.execute(
-        "CREATE TABLE IF NOT EXISTS evaluation_errors (job_id TEXT, name TEXT, reason TEXT, PRIMARY KEY(job_id,name))"
-    )
-    c.execute(
-        "CREATE TABLE IF NOT EXISTS batch_runs (id TEXT PRIMARY KEY, params TEXT, created REAL)"
-    )
-    c.execute(
-        "CREATE TABLE IF NOT EXISTS batch_generations (batch_id TEXT, generation_id TEXT, PRIMARY KEY(batch_id,generation_id))"
-    )
+    schema.initialize(c)
+
 
 with db() as c:
     security.initialize(c)
+    if not schema.missing_constraints(c):
+        c.execute("INSERT OR IGNORE INTO schema_migrations VALUES (2,?)", (time.time(),))
+    artifact_storage.initialize(c)
+    c.execute("CREATE TABLE IF NOT EXISTS reference_versions (reference_id TEXT PRIMARY KEY REFERENCES references_audio(id), transcript TEXT NOT NULL, language TEXT NOT NULL)")
+    c.execute("INSERT OR IGNORE INTO reference_versions SELECT reference_id,transcript,language FROM user_reference_profiles")
     c.execute("CREATE TABLE IF NOT EXISTS job_provenance (job_id TEXT PRIMARY KEY REFERENCES jobs(id), configuration TEXT NOT NULL)")
+security.limiter.bind(DB)
 if security.production():
     DB.chmod(0o600)
 
@@ -215,8 +236,8 @@ def install_backend_reference():
     )
     with db() as c:
         existing = c.execute(
-            "SELECT id,path FROM references_audio WHERE sha256=? ORDER BY created DESC LIMIT 1",
-            (digest,),
+            "SELECT r.id,r.path FROM references_audio r JOIN settings s ON s.key='shared-reference:'||r.id JOIN reference_versions v ON v.reference_id=r.id WHERE r.sha256=? AND v.transcript=? ORDER BY r.created DESC LIMIT 1",
+            (digest, transcript),
         ).fetchone()
         if existing and Path(existing["path"]).is_file():
             ref_id = existing["id"]
@@ -228,6 +249,7 @@ def install_backend_reference():
                 "INSERT INTO references_audio VALUES (?,?,?,?,?)",
                 (ref_id, digest, "reference.wav", str(target), time.time()),
             )
+        c.execute("INSERT OR IGNORE INTO reference_versions VALUES (?,?,?)", (ref_id, transcript, "English" if "_en" in str(REFERENCE_AUDIO) else "German"))
         mark_shared_reference(c, ref_id)
         c.execute(
             "INSERT INTO reference_profiles(id,reference_id,transcript,updated) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET reference_id=excluded.reference_id,transcript=excluded.transcript,updated=excluded.updated",
@@ -238,42 +260,76 @@ def install_backend_reference():
 
 def load_backend_reference():
     with db() as c:
-        for table, column in (("references_audio", "path"), ("jobs", "output")):
+        for select, update in (
+            ("SELECT id,path FROM references_audio WHERE path IS NOT NULL", "UPDATE references_audio SET path=? WHERE id=?"),
+            ("SELECT id,output AS path FROM jobs WHERE output IS NOT NULL", "UPDATE jobs SET output=? WHERE id=?"),
+        ):
             for row in c.execute(
-                f"SELECT id,{column} AS path FROM {table} WHERE {column} IS NOT NULL"
+                select
             ).fetchall():
                 relocated = ROOT / "audio" / Path(row["path"]).name
                 if not Path(row["path"]).is_file() and relocated.is_file():
                     c.execute(
-                        f"UPDATE {table} SET {column}=? WHERE id=?",
+                        update,
                         (str(relocated), row["id"]),
                     )
     install_backend_reference()
     with db() as c:
+        interrupted = [row[0] for row in c.execute("SELECT id FROM jobs WHERE status IN ('pending','running')")]
+        for identifier in interrupted:
+            try:
+                uuid.UUID(identifier)
+            except (ValueError, TypeError):
+                continue
+            (ROOT / "audio" / f"{identifier}.wav").unlink(missing_ok=True)
+        c.execute("UPDATE batch_runs SET status='interrupted' WHERE status='planning'")
         c.execute(
             "UPDATE jobs SET status='failed',error='Inference interrupted by backend restart',updated=? WHERE status IN ('pending','running')",
             (time.time(),),
         )
+        artifact_storage.backfill(c, ROOT)
+        c.execute("DELETE FROM storage_reservations")
         c.execute(
             "UPDATE evaluation_runs SET status='interrupted',error='Evaluation interrupted by backend restart',updated=? WHERE status IN ('pending','running')",
             (time.time(),),
         )
 
 
-@app.post("/api/admin/reload-reference")
-def reload_backend_reference(authorization: str | None = Header(None)):
-    token = os.environ.get("ADMIN_TOKEN")
-    if security.production() and os.getenv("AUTH_MODE") == "accounts":
+def require_administrator(authorization):
+    expected = os.getenv("ADMIN_TOKEN", "")
+    if not expected or not hmac.compare_digest((authorization or "").encode(), ("Bearer "+expected).encode()):
+        raise HTTPException(403, "Administrator credentials required")
+    if os.getenv("AUTH_MODE") == "accounts":
         with db() as c:
             account = c.execute("SELECT role FROM accounts WHERE id=?", (security.principal.get(),)).fetchone()
         if not account or account["role"] != "admin":
             raise HTTPException(403, "Administrator account required")
-    if not token or not hmac.compare_digest(authorization or "", "Bearer " + token):
-        raise HTTPException(403, "Admin token required")
+
+
+@app.post("/api/admin/reload-reference")
+def reload_backend_reference(authorization: str | None = Header(None)):
+    require_administrator(authorization)
     return {"loaded": install_backend_reference()}
 
 
-class GenerateRequest(BaseModel):
+@app.get("/api/admin/security-events")
+def security_events(authorization: str | None = Header(None)):
+    require_administrator(authorization)
+    with db() as c:
+        rows=c.execute("SELECT created,kind,request_id FROM security_events ORDER BY id DESC LIMIT 100").fetchall()
+    return [dict(row) for row in rows]
+
+
+class RequestModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class ModelControls(RequestModel):
+    temperature: float | None = Field(default=None, ge=0.1, le=1.5, allow_inf_nan=False)
+    speech_rate: float | None = Field(default=None, ge=0.8, le=1.1, allow_inf_nan=False)
+
+
+class GenerateRequest(RequestModel):
     use_cache: bool = True
     text: str = Field(min_length=1, max_length=2000)
     reference_id: str | None = None
@@ -283,9 +339,10 @@ class GenerateRequest(BaseModel):
     temperature: float | None = Field(default=None, ge=0.1, le=1.5, allow_inf_nan=False)
     speech_rate: float | None = Field(default=None, ge=0.8, le=1.1, allow_inf_nan=False)
     seed: int | None = Field(default=None, ge=0, le=4294967295)
+    model_settings: dict[Literal["qwen3", "cosyvoice3", "xtts-v2"], ModelControls] = Field(default_factory=dict)
 
 
-class BatchRequest(BaseModel):
+class BatchRequest(RequestModel):
     reference_id: str
     models: list[str] = Field(min_length=1, max_length=3)
     texts: list[str] = Field(min_length=1, max_length=100)
@@ -293,14 +350,14 @@ class BatchRequest(BaseModel):
     reference_text: str = Field(default="", max_length=4000)
 
 
-class RatingRequest(BaseModel):
+class RatingRequest(RequestModel):
     job_id: str
     rater: str = Field(default="Evaluator", min_length=1, max_length=100)
     category: str = Field(pattern="^(naturalness|similarity|intelligibility)$")
     rating: int = Field(ge=1, le=5)
 
 
-class LayoutRequest(BaseModel):
+class LayoutRequest(RequestModel):
     active: list[str] = Field(max_length=3)
 
 
@@ -316,10 +373,14 @@ def health():
 
 @app.get("/api/models")
 def models():
-    return [
-        {"id": m, "name": LABELS[m], **direct_inference.model_availability(m)}
-        for m in MODEL_IDS
-    ]
+    result = []
+    for model in MODEL_IDS:
+        state = dict(direct_inference.model_availability(model))
+        if security.production() and state.get("detail"):
+            state["detail"] = "Model unavailable; contact the administrator"
+        result.append({"id": model, "name": LABELS[model], **state,
+                       "controls": {"temperature": model != "cosyvoice3", "speech_rate": True}})
+    return result
 
 
 def get_installed_reference(filename: str, text_filename: str):
@@ -339,8 +400,8 @@ def get_installed_reference(filename: str, text_filename: str):
     transcript = text_path.read_text(encoding="utf-8").strip() if text_path.is_file() else ""
     with db() as c:
         existing = c.execute(
-            "SELECT id,path FROM references_audio WHERE sha256=? ORDER BY created DESC LIMIT 1",
-            (digest,),
+            "SELECT r.id,r.path FROM references_audio r JOIN settings s ON s.key='shared-reference:'||r.id JOIN reference_versions v ON v.reference_id=r.id WHERE r.sha256=? AND v.transcript=? ORDER BY r.created DESC LIMIT 1",
+            (digest, transcript),
         ).fetchone()
         if existing and Path(existing["path"]).is_file():
             ref_id = existing["id"]
@@ -352,6 +413,7 @@ def get_installed_reference(filename: str, text_filename: str):
                 "INSERT INTO references_audio VALUES (?,?,?,?,?)",
                 (ref_id, digest, filename, str(target), time.time()),
             )
+        c.execute("INSERT OR IGNORE INTO reference_versions VALUES (?,?,?)", (ref_id, transcript, "English" if "_en" in filename else "German"))
         mark_shared_reference(c, ref_id)
     return {
         "id": ref_id,
@@ -388,6 +450,11 @@ def get_reference_profile(language: str = "German"):
                     "SELECT reference_id,transcript FROM reference_profiles WHERE id=1"
                 ).fetchone()
                 if row:
+                    try:
+                        require_reference(c, row["reference_id"])
+                    except HTTPException:
+                        row = None
+                if row:
                     db_ref = c.execute(
                         "SELECT id,filename,path FROM references_audio WHERE id=?",
                         (row["reference_id"],),
@@ -410,7 +477,12 @@ def get_reference_profile(language: str = "German"):
 async def upload_reference(
     file: UploadFile = File(...),
     transcript: str = Form(""),
+    language: str = Form("German"),
 ):
+    aliases = {"German": "German", "de": "German", "English": "English", "en": "English"}
+    if language not in aliases:
+        raise HTTPException(422, "Unsupported reference language")
+    language = aliases[language]
     if not file.filename or not file.filename.lower().endswith(".wav"):
         raise HTTPException(400, "Reference must be a .wav file")
     if len(transcript) > 4000 or "\x00" in transcript:
@@ -433,6 +505,8 @@ async def upload_reference(
     reference_id = str(uuid.uuid4())
     target = ROOT / "audio" / f"{reference_id}.wav"
     with db() as c:
+        c.execute("BEGIN IMMEDIATE")
+        artifact_storage.capacity(c, ROOT, security.owner(), len(content))
         count = c.execute("SELECT count(*) FROM resource_owners WHERE kind='reference' AND owner_id=?", (security.owner(),)).fetchone()[0]
         if count >= 50:
             raise HTTPException(429, "Reference storage quota reached")
@@ -441,12 +515,14 @@ async def upload_reference(
             c.execute("INSERT INTO references_audio VALUES (?,?,?,?,?)",
                       (reference_id, hashlib.sha256(content).hexdigest(), "reference.wav", str(target), time.time()))
             security.claim(c, "reference", reference_id)
+            artifact_storage.record(c, target, security.owner(), "reference")
+            c.execute("INSERT INTO reference_versions VALUES (?,?,?)", (reference_id, transcript.strip(), language))
             c.execute("INSERT INTO user_reference_profiles VALUES (?,?,?,?) ON CONFLICT(owner_id,language) DO UPDATE SET reference_id=excluded.reference_id,transcript=excluded.transcript",
-                      (security.owner(), "German", reference_id, transcript.strip()))
+                      (security.owner(), language, reference_id, transcript.strip()))
         except Exception:
             target.unlink(missing_ok=True)
             raise
-    return get_reference_profile()
+    return get_reference_profile(language)
 
 
 @app.get("/api/references/{reference_id}/audio")
@@ -466,6 +542,12 @@ def reference_audio(reference_id: str):
 def update_job(job_id, status, output=None, error=None, runtime_seconds=None):
     now = time.time()
     with db() as c:
+        if status not in ("pending", "running"):
+            if status == "complete" and output:
+                own = c.execute("SELECT owner_id FROM resource_owners WHERE kind='job' AND resource_id=?", (job_id,)).fetchone()
+                if own:
+                    artifact_storage.record(c, output, own["owner_id"], "output")
+            c.execute("DELETE FROM storage_reservations WHERE id=?", (job_id,))
         if status == "running":
             c.execute(
                 "UPDATE jobs SET status=?,started_at=?,updated=? WHERE id=?",
@@ -484,6 +566,17 @@ def execute_worker(
     output = ROOT / "audio" / f"{job_id}.wav"
     try:
         t0 = time.perf_counter()
+        if process_isolation():
+            output_path, elapsed, first_audio = WORKERS.get(model_id).call(
+                (text, reference_path, reference_text, str(output), language, config),
+                timeout=float(os.getenv("GENERATION_TIMEOUT_SECONDS", "600")),
+                cancelled=JOB_CANCELLATIONS.get(job_id),
+            )
+            if first_audio is not None:
+                from models import record_timing
+                record_timing(output, "first_audio_ms", first_audio)
+            validate_generated_audio(output)
+            return output_path, elapsed
         from models import _request_language
         token = _request_language.set(language)
         config_token = generation_config.set(config)
@@ -506,9 +599,7 @@ def execute_worker(
             _request_language.reset(token)
             generation_config.reset(config_token)
         t_elapsed = time.perf_counter() - t0
-        with wave.open(str(output), "rb") as f:
-            if f.getnframes() == 0:
-                raise RuntimeError("Model produced empty WAV")
+        validate_generated_audio(output)
         return str(output), t_elapsed
     except Exception:
         output.unlink(missing_ok=True)
@@ -528,18 +619,22 @@ def evaluate_job(job_id: str):
             ).fetchone()
         if not row or not row["output"]:
             raise RuntimeError("Recording missing or job not complete")
-        evaluator = get_evaluator()
+        evaluator = None if process_isolation() else get_evaluator()
         with _evaluator_lock:
             elapsed = (
                 row["runtime_seconds"]
                 if row["runtime_seconds"] is not None
                 else max(0, row["updated"] - row["created"])
             )
-            metrics = evaluator.evaluate(
-                row["output"], row["reference"], row["text"], elapsed
-            )
-            errors = dict(evaluator.errors)
-            evaluator.errors.clear()
+            if process_isolation():
+                metrics, errors = WORKERS.get("evaluation").call(
+                    (row["output"], row["reference"], row["text"], elapsed),
+                    timeout=float(os.getenv("EVALUATION_TIMEOUT_SECONDS", "600")),
+                )
+            else:
+                metrics = evaluator.evaluate(row["output"], row["reference"], row["text"], elapsed)
+                errors = dict(evaluator.errors)
+                evaluator.errors.clear()
         with db() as c:
             c.execute("DELETE FROM metrics WHERE job_id=?", (job_id,))
             for name, value, method in metrics:
@@ -612,34 +707,65 @@ def auto_evaluate(job_id):
             )
 
 
+def validate_generated_audio(output):
+    if output.stat().st_size > int(os.getenv("MAX_OUTPUT_BYTES", "67108864")):
+        raise RuntimeError("Generated audio exceeds storage limit")
+    with wave.open(str(output), "rb") as reader:
+        count, rate = reader.getnframes(), reader.getframerate()
+        if not 8000 <= rate <= 96000 or reader.getnchannels() not in (1, 2):
+            raise RuntimeError("Invalid generated audio format")
+        if not count or count/rate > float(os.getenv("MAX_OUTPUT_SECONDS", "600")):
+            raise RuntimeError("Generated audio exceeds duration limit")
+        if len(reader.readframes(count)) != count*reader.getnchannels()*reader.getsampwidth():
+            raise RuntimeError("Generated audio is truncated")
+
+
 async def run_job(job_id, model, text, path, reference_text, language="German", config=GenerationConfig()):
-    async with MODEL_LOCKS[model]:
-        update_job(job_id, "running")
-        try:
+    future = None
+    try:
+        async with MODEL_LOCKS[model]:
+            update_job(job_id, "running")
             loop = asyncio.get_running_loop()
-            output, runtime = await loop.run_in_executor(
-                POOL,
-                execute_worker,
-                job_id,
-                model,
-                text,
-                path,
-                reference_text,
-                language,
-                config,
-            )
+            future = loop.run_in_executor(POOL, execute_worker, job_id, model, text, path, reference_text, language, config)
+            output, runtime = await asyncio.shield(future)
             update_job(job_id, "complete", output, runtime_seconds=runtime)
             if os.environ.get("AUTO_EVALUATE", "1") == "1":
                 auto_evaluate(job_id)
-        except Exception as exc:
-            logger.exception("Inference failed job=%s", job_id)
-            err_msg = "Inference failed; contact the administrator with the job ID"
-            update_job(
-                job_id,
-                "failed",
-                error=err_msg[:2000],
-                runtime_seconds=locals().get("runtime"),
-            )
+    except asyncio.CancelledError:
+        JOB_CANCELLATIONS[job_id].set()
+        if future is not None:
+            try:
+                await asyncio.shield(future)
+            except Exception:
+                pass
+        (ROOT / "audio" / f"{job_id}.wav").unlink(missing_ok=True)
+        update_job(job_id, "cancelled", error="Generation cancelled")
+        raise
+    except InferenceCancelled:
+        update_job(job_id, "cancelled", error="Generation cancelled")
+    except TimeoutError:
+        update_job(job_id, "failed", error="Generation exceeded its configured time limit")
+    except Exception:
+        logger.exception("Inference failed job=%s", job_id)
+        update_job(job_id, "failed", error="Inference failed; contact the administrator with the job ID")
+    finally:
+        JOB_CANCELLATIONS.pop(job_id, None)
+
+
+@app.delete("/api/jobs/{job_id}")
+async def cancel_job(job_id: str):
+    with db() as c:
+        security.require_owner(c, "job", job_id)
+        row = c.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if row["status"] not in ("pending", "running"):
+        raise HTTPException(409, "Only active jobs can be cancelled")
+    task = TASKS.get(job_id)
+    if task is None:
+        raise HTTPException(409, "Job is no longer active in this process")
+    if not task.cancel():
+        raise HTTPException(409, "Job already finished")
+    await asyncio.gather(task, return_exceptions=True)
+    return {"id": job_id, "status": "cancelled"}
 
 
 @app.post("/api/generations", status_code=202)
@@ -653,7 +779,16 @@ async def _generate_impl(request: GenerateRequest, deferred=None):
         raise HTTPException(422, "CosyVoice temperature is unsupported; leave temperature unset for comparison")
     if request.seed is not None and os.getenv("REPRODUCIBLE") != "1":
         raise HTTPException(422, "Seeded requests require REPRODUCIBLE=1 (serialized inference)")
-    config = GenerationConfig(request.temperature, request.speech_rate, request.seed)
+    if any(model not in request.models for model in request.model_settings):
+        raise HTTPException(422, "Settings were supplied for an unselected model")
+    if request.model_settings.get("cosyvoice3", ModelControls()).temperature is not None:
+        raise HTTPException(422, "CosyVoice temperature is unsupported")
+    configurations = {}
+    for model in request.models:
+        custom = request.model_settings.get(model, ModelControls())
+        config = GenerationConfig(custom.temperature if custom.temperature is not None else request.temperature,
+                                  custom.speech_rate if custom.speech_rate is not None else request.speech_rate, request.seed)
+        configurations[model] = config
     if not request.text.strip():
         raise HTTPException(422, "Enter a nonempty speech script")
     if len(TASKS) + len(request.models) > MAX_PENDING:
@@ -694,6 +829,13 @@ async def _generate_impl(request: GenerateRequest, deferred=None):
         ref = c.execute(
             "SELECT * FROM references_audio WHERE id=?", (selected_reference,)
         ).fetchone()
+    if not effective_transcript:
+        with db() as c:
+            version = c.execute("SELECT transcript,language FROM reference_versions WHERE reference_id=?", (selected_reference,)).fetchone()
+        if version:
+            effective_transcript = version["transcript"]
+    if "cosyvoice3" in request.models and not effective_transcript.strip():
+        raise HTTPException(422, "CosyVoice requires a transcript for the selected reference")
     if not ref or not Path(ref["path"]).is_file():
         expected_wav = "reference_en.wav" if req_lang.lower() in ("english", "en") else "reference.wav"
         raise HTTPException(422, f"Configure backend/reference/{expected_wav} first")
@@ -712,7 +854,7 @@ async def _generate_impl(request: GenerateRequest, deferred=None):
         if not status["configured"]
     ]
     if unavailable:
-        raise HTTPException(503, "; ".join(unavailable))
+        raise HTTPException(503, "Selected model unavailable; contact the administrator" if security.production() else "; ".join(unavailable))
     now = time.time()
     batch_id = str(uuid.uuid4())
     planned = []
@@ -731,12 +873,14 @@ async def _generate_impl(request: GenerateRequest, deferred=None):
         )
         security.claim(c, "generation", batch_id)
         for model in request.models:
+            config = configurations[model]
+            effective = effective_parameters(model, config)
             key = hashlib.sha256(
                 json.dumps(
                     [
                         model,
                         security.owner(),
-                        request.temperature, request.speech_rate, request.seed,
+                        effective,
                         os.getenv("GIT_REVISION", "unknown"),
                         ref["sha256"],
                         request.text.strip(),
@@ -780,9 +924,12 @@ async def _generate_impl(request: GenerateRequest, deferred=None):
                 ),
             )
             security.claim(c, "job", job_id)
+            if not out:
+                artifact_storage.reserve(c, ROOT, security.owner(), job_id, int(os.getenv("MAX_OUTPUT_BYTES", "67108864")))
             provenance = {"model_id": model, "model_revision": os.getenv({"qwen3":"QWEN_REVISION", "cosyvoice3":"COSY_REVISION", "xtts-v2":"XTTS_REVISION"}[model], "unverified"),
                           "reference_sha256": ref["sha256"], "transcript_sha256": hashlib.sha256(effective_transcript.encode()).hexdigest(),
-                          "language": req_lang, "temperature": request.temperature, "speech_rate": request.speech_rate,
+                          "language": req_lang, "temperature": config.temperature, "speech_rate": config.speech_rate,
+                          "effective_parameters": effective,
                           "seed": request.seed, "software_revision": os.getenv("GIT_REVISION", "unknown"),
                           "device": os.getenv("MODEL_DEVICE", "auto"),
                           "environment_controls": {k:v for k,v in os.environ.items() if k in (
@@ -794,7 +941,7 @@ async def _generate_impl(request: GenerateRequest, deferred=None):
         if out and os.environ.get("AUTO_EVALUATE", "1") == "1":
             auto_evaluate(job_id)
         if not out:
-            args = (job_id, model, request.text.strip(), ref["path"], effective_transcript, req_lang, config)
+            args = (job_id, model, request.text.strip(), ref["path"], effective_transcript, req_lang, configurations[model])
             if deferred is not None:
                 deferred.append(args)
             else:
@@ -815,9 +962,17 @@ async def _generate_impl(request: GenerateRequest, deferred=None):
 
 def submit_job(args):
     job_id = args[0]
+    JOB_CANCELLATIONS[job_id] = threading.Event()
     task = asyncio.create_task(run_job(*args))
     TASKS[job_id] = task
-    task.add_done_callback(lambda _, jid=job_id: TASKS.pop(jid, None))
+    def finished(done):
+        TASKS.pop(job_id, None)
+        JOB_CANCELLATIONS.pop(job_id, None)
+        if done.cancelled():
+            with db() as c:
+                c.execute("UPDATE jobs SET status='cancelled',error='Generation cancelled',updated=? WHERE id=? AND status IN ('pending','running')", (time.time(), job_id))
+                c.execute("DELETE FROM storage_reservations WHERE id=?", (job_id,))
+    task.add_done_callback(finished)
 
 
 @app.get("/api/generations/{batch_id}")
@@ -1026,7 +1181,7 @@ async def _batch_experiment_impl(body: BatchRequest):
     parent = str(uuid.uuid4())
     with db() as c:
         c.execute(
-            "INSERT INTO batch_runs VALUES (?,?,?)",
+            "INSERT INTO batch_runs(id,params,created,status) VALUES (?,?,?,'planning')",
             (parent, body.model_dump_json(), time.time()),
         )
         security.claim(c, "batch", parent)
@@ -1045,9 +1200,11 @@ async def _batch_experiment_impl(body: BatchRequest):
     except BaseException:
         # No synthesis starts until every child has passed validation/admission.
         with db() as c:
+            c.execute("DELETE FROM batch_generations WHERE batch_id=?", (parent,))
             for generation_id in generated:
                 jobs = [r[0] for r in c.execute("SELECT id FROM jobs WHERE batch_id=?", (generation_id,))]
                 for job_id in jobs:
+                    c.execute("DELETE FROM storage_reservations WHERE id=?", (job_id,))
                     c.execute("DELETE FROM job_provenance WHERE job_id=?", (job_id,))
                     c.execute("DELETE FROM resource_owners WHERE kind='job' AND resource_id=?", (job_id,))
                 c.execute("DELETE FROM jobs WHERE batch_id=?", (generation_id,))
@@ -1057,6 +1214,8 @@ async def _batch_experiment_impl(body: BatchRequest):
             c.execute("DELETE FROM batch_runs WHERE id=?", (parent,))
             c.execute("DELETE FROM resource_owners WHERE kind='batch' AND resource_id=?", (parent,))
         raise
+    with db() as c:
+        c.execute("UPDATE batch_runs SET status='ready' WHERE id=?", (parent,))
     for args in deferred:
         submit_job(args)
     return {
@@ -1086,6 +1245,7 @@ def batch_status(batch_id: str):
         "id": batch_id,
         "created": b["created"],
         "configuration": json.loads(b["params"]),
+        "status": b["status"],
         "generations": _batch_generations(batch_id),
     }
 
@@ -1110,67 +1270,97 @@ def export_batch(batch_id: str):
             "SELECT * FROM metrics WHERE job_id IN (SELECT id FROM jobs WHERE batch_id=?)",
             (batch_id,),
         ).fetchall()
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        out = io.StringIO()
-        writer = csv.writer(out)
-        writer.writerow(
-            ["job_id", "model_id", "status", "text", "reference_id", "error"]
-        )
-        for r in rows:
+    if not EXPORT_SLOTS.acquire(blocking=False):
+        raise HTTPException(429, "Export capacity reached")
+    exports = ROOT / "exports"
+    exports.mkdir(mode=0o700, exist_ok=True)
+    identifier = "export:" + str(uuid.uuid4())
+    target = None
+    released = False
+    def release():
+        nonlocal released
+        if released:
+            return
+        released = True
+        if target is not None:
+            target.unlink(missing_ok=True)
+        with db() as c:
+            c.execute("DELETE FROM storage_reservations WHERE id=?", (identifier,))
+        EXPORT_SLOTS.release()
+    try:
+        required = int(sum(Path(row["output"]).stat().st_size for row in rows if row["output"] and Path(row["output"]).is_file()) * 1.01) + 1048576
+        if required > int(os.getenv("MAX_EXPORT_BYTES", "268435456")):
+            raise HTTPException(413, "Export exceeds configured size limit")
+        with db() as c:
+            c.execute("BEGIN IMMEDIATE")
+            artifact_storage.reserve(c, ROOT, security.owner(), identifier, required)
+        descriptor, filename = tempfile.mkstemp(prefix="export-", suffix=".zip", dir=exports)
+        os.close(descriptor)
+        target = Path(filename)
+        with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            out = io.StringIO()
+            writer = csv.writer(out)
             writer.writerow(
-                [
-                    r["id"],
-                    r["model_id"],
-                    r["status"],
-                    csv_safe(r["text"]),
-                    r["reference_id"],
-                    r["error"] or "",
-                ]
+                ["job_id", "model_id", "status", "text", "reference_id", "error"]
             )
-            if r["output"] and Path(r["output"]).is_file():
-                archive.write(stored_audio(r["output"]), f"audio/{r['model_id']}_{r['id']}.wav")
-        archive.writestr("jobs.csv", out.getvalue())
-        out = io.StringIO()
-        writer = csv.writer(out)
-        writer.writerow(["job_id", "metric", "value", "evaluator"])
-        for m in metrics:
-            writer.writerow([m["job_id"], m["name"], m["value"], m["evaluator"]])
-        archive.writestr("metrics.csv", out.getvalue())
-        archive.writestr(
-            "metadata.json",
-            json.dumps({"batch_id": batch_id, "generated_at": time.time(), "jobs": provenance}),
-        )
-    buf.seek(0)
-    return StreamingResponse(
-        buf,
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": f'attachment; filename="voice-experiment-{batch_id}.zip"'
-        },
-    )
+            for r in rows:
+                writer.writerow(
+                    [
+                        r["id"],
+                        r["model_id"],
+                        r["status"],
+                        csv_safe(r["text"]),
+                        r["reference_id"],
+                        r["error"] or "",
+                    ]
+                )
+                if r["output"] and Path(r["output"]).is_file():
+                    archive.write(stored_audio(r["output"]), f"audio/{r['model_id']}_{r['id']}.wav")
+            archive.writestr("jobs.csv", out.getvalue())
+            out = io.StringIO()
+            writer = csv.writer(out)
+            writer.writerow(["job_id", "metric", "value", "evaluator"])
+            for m in metrics:
+                writer.writerow([m["job_id"], m["name"], m["value"], m["evaluator"]])
+            archive.writestr("metrics.csv", out.getvalue())
+            archive.writestr(
+                "metadata.json",
+                json.dumps({"batch_id": batch_id, "generated_at": time.time(), "jobs": provenance}),
+            )
+        return PrivateExportResponse(target, release, media_type="application/zip", filename=f"voice-experiment-{batch_id}.zip",
+                                     headers={"Cache-Control": "no-store"})
+    except BaseException:
+        release()
+        raise
 
 
-class Login(BaseModel):
+class Login(RequestModel):
     token: str = Field(default="", max_length=1000)
     username: str = Field(default="", max_length=100)
     password: str = Field(default="", max_length=1000)
+    transport: Literal["cookie", "bearer"] = "cookie"
 
 
 @app.post("/api/session")
 def login(body: Login, request: Request):
     source = request.client.host if request.client else "unknown"
-    account = hashlib.sha256(body.username.casefold().strip().encode()).hexdigest()
+    account_name = "legacy" if os.getenv("AUTH_MODE", "token") == "token" else body.username.casefold().strip()
+    account = hashlib.sha256(account_name.encode()).hexdigest()
     if not security.limiter.allow(("login-ip", source), 20, 300) or not security.limiter.allow(("login-account", account), 10, 300):
         logger.warning("Login rate limit reached")
         raise HTTPException(429, "Too many login attempts; retry later", headers={"Retry-After": "300"})
+    failure = None
     with db() as c:
         try:
             cookie = security.authenticate(c, body.token, body.username, body.password)
-        except HTTPException:
-            logger.warning("Login failed")
-            raise
-    response = JSONResponse({"authenticated": True})
+            security.event(c, "login_success", request.state.request_id)
+        except HTTPException as error:
+            security.event(c, "login_failure", request.state.request_id)
+            failure = error
+    if failure:
+        logger.warning("Login failed request=%s", request.state.request_id)
+        raise failure
+    response = JSONResponse({"authenticated": True} | ({"session_token": cookie} if body.transport == "bearer" else {}))
     secure = os.getenv("COOKIE_SECURE", "0") == "1"
     response.set_cookie("studio_session", cookie, httponly=True, secure=secure,
                         samesite="none" if secure else "lax", max_age=security.SESSION_SECONDS, path="/")
@@ -1178,7 +1368,7 @@ def login(body: Login, request: Request):
     return response
 
 
-class PasswordReset(BaseModel):
+class PasswordReset(RequestModel):
     token: str = Field(min_length=1, max_length=1000)
     password: str = Field(min_length=12, max_length=1000)
 
@@ -1194,6 +1384,9 @@ def reset_password(body: PasswordReset, request: Request):
     except ValueError:
         raise HTTPException(422, "Use a unique password of at least 12 characters")
     digest = hashlib.sha256(body.token.encode()).hexdigest()
+    with db() as c:
+        if not c.execute("SELECT 1 FROM password_resets WHERE digest=? AND expires>?", (digest,time.time())).fetchone():
+            raise HTTPException(400, "Invalid or expired reset token")
     hashed = security.passwords.hash(body.password)
     with db() as c:
         c.execute("BEGIN IMMEDIATE")
@@ -1214,7 +1407,7 @@ def session_state():
 @app.delete("/api/session")
 def logout(request: Request):
     with db() as c:
-        c.execute("DELETE FROM sessions WHERE digest=?", (hashlib.sha256(request.cookies.get("studio_session", "").encode()).hexdigest(),))
+        c.execute("DELETE FROM sessions WHERE digest=?", (hashlib.sha256(security.session_value(request).encode()).hexdigest(),))
     response = JSONResponse({"authenticated": False})
     response.delete_cookie("studio_session", path="/")
     return response
@@ -1240,6 +1433,8 @@ async def protect_api(request: Request, call_next):
     user = None
     context = None
     try:
+        if security.production() and request.url.scheme != "https" and (request.client is None or request.client.host not in ("127.0.0.1", "::1")):
+            return JSONResponse({"detail": "HTTPS required"}, status_code=400)
         if request.method != "OPTIONS" and request.url.path.startswith("/api/"):
             origin = request.headers.get("origin")
             own_origin = str(request.base_url).rstrip("/")
@@ -1250,7 +1445,7 @@ async def protect_api(request: Request, call_next):
                 user, cookie_auth = security.identify(request, c)
             public = request.url.path in ("/api/health", "/api/deployment", "/api/password-reset") or (request.url.path == "/api/session" and request.method in ("GET", "POST"))
             # Admin reload remains separately bearer-authorized, never cookie-authorized.
-            admin = request.url.path == "/api/admin/reload-reference"
+            admin = request.url.path.startswith("/api/admin/")
             if not public and not admin and user is None:
                 return JSONResponse({"detail": "Unauthorized"}, status_code=401)
             if mutable and cookie_auth and request.headers.get("X-Studio-CSRF") != "1":
@@ -1314,6 +1509,7 @@ class BodyLimitMiddleware:
         await self.app(scope, bounded_receive, send)
 
 app.add_middleware(BodyLimitMiddleware)
+app.add_middleware(SecurityHeaders)
 
 # Register CORS after authentication so it wraps early 401/403 responses too.
 app.add_middleware(
