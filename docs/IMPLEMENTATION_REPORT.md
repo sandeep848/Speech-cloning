@@ -26,7 +26,7 @@ The original main commit was `1e5b70d3b9497395ce53b94b640dfd25102f0587`. Work is
 | 4 Deployment | Explicit package setup/build switches, early config/port checks, identity/readiness endpoints, production-safe source/download restrictions and hardened templates. | Installed services, verified TLS/CSP/forwarding, operational readiness, hard worker cancellation/timeouts. |
 | 5 Controls | Nullable temperature/rate fields, Qwen/XTTS temperature contracts, explicit Cosy rejection, global frontend controls, cache/provenance/export preservation. | Per-model UI refinement, installed upstream API compatibility and real-model download/listening validation. |
 | 6 Speech research | Existing benchmark preserved and an honest evaluation protocol documented. | Expanded validated corpus, blinded/randomized UI, objective and human experiments, measured recommendations. |
-| 7 Validation | 74 backend tests; frontend TypeScript/build; npm/pip dependency scans; Bandit; Gitleaks working-tree/history scans. | Browser runtime, real models, full load/restart/GPU tests, off-host restore/alerts, Semgrep completion. |
+| 7 Validation | 74 backend tests; frontend TypeScript/build; npm/pip dependency scans; Bandit; Gitleaks working-tree/history scans. | Browser runtime, real models, full load/restart/GPU tests, off-host restore/alerts; completed Semgrep findings require the documented review assumptions. |
 | 8 Release | Draft candidate, documentation, migration/rollback procedures, blockers and evidence. | Required checks/branch protection setup, human review, reviewed staging deployment, public release. |
 
 ## B. Files modified
@@ -179,4 +179,8 @@ The initial PR head was `542dd15b91929a85df2f6d34fdf61d07d12d20e2`, with publish
 
 Dependency Review **failed** because GitHub reported Dependency graph disabled/unsupported for the repository. This is not a vulnerability finding or a passing review. Enable Dependency graph in [repository security analysis settings](https://github.com/sandeep848/Speech-cloning/settings/security_analysis), then rerun the gate. No gate was removed, suppressed or made non-blocking to hide this failure. The connected tools do not expose this repository-administration setting.
 
-Semgrep remains blocked by automatic approval review and unverified. Public-release status remains Not ready.
+Semgrep was initially blocked. After explicit user authorization it completed: 73 files, 299 applicable rules, five reviewed findings and no parsing errors. See [SEMGREP_SCAN.md](SEMGREP_SCAN.md) and its raw evidence. Public-release status remains Not ready.
+
+## Semgrep follow-up
+
+The earlier blocked-run entries above are historical. After the user's explicit authorization, the expanded scan completed with four ERROR and one WARNING result, retained without suppression. Manual review found no demonstrated remote exploit in those five results under the documented CLI/test/loopback trust boundaries. The final report has zero parsing errors and includes all nine test source files. The frontend build passed after semantically equivalent JSX entity changes. See SEMGREP_SCAN.md for exact command, findings, scope and raw JSON.

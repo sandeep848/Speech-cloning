@@ -1,0 +1,12 @@
+# Scan application code AND tests. Exclude generated/vendor/binary artifacts.
+.git/
+**/__pycache__/
+.pytest_cache/
+frontend/node_modules/
+frontend/dist/
+backend/data/
+backend/models/*/weights/
+backend/models/cosyvoice3/repo/
+backend/models/evaluators/
+**/*.wav
+**/*.mp3

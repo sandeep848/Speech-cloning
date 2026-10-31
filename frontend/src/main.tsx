@@ -898,7 +898,7 @@ function App() {
                 {active.map(card)}
                 {!active.length && (
                   <div className="empty-workspace">
-                    Open Models & presets to add engines to the comparison.
+                    Open Models &amp; presets to add engines to the comparison.
                   </div>
                 )}
               </div>
@@ -909,7 +909,7 @@ function App() {
             <>
               <div className="heading">
                 <div>
-                  <h1>Advanced Evaluation & Benchmark Matrix</h1>
+                  <h1>Advanced Evaluation &amp; Benchmark Matrix</h1>
                   <p>
                     Standardized speech metrics including Character Error Rate (CER), Word Error Rate
                     (WER), Real-Time Factor (RTF), Speaker Similarity (ECAPA),
