@@ -15,6 +15,10 @@ class WorkerFailure(RuntimeError):
     pass
 
 
+class TerminationFailure(WorkerFailure):
+    pass
+
+
 class InferenceCancelled(WorkerFailure):
     pass
 
@@ -106,7 +110,7 @@ class Worker:
             if process.is_alive():
                 # A resource slot must never be silently reused after failed reaping.
                 self.process = process
-                raise WorkerFailure('Worker termination could not be confirmed')
+                raise TerminationFailure('Worker termination could not be confirmed')
             process.close()
 
     def close(self):
@@ -123,6 +127,8 @@ class Worker:
             if time.monotonic()-started >= timeout:
                 raise TimeoutError('Worker remained busy beyond the request limit')
         try:
+            if self.process is not None and self.connection is None:
+                raise TerminationFailure("Unreaped worker requires operator intervention")
             if self.abort.is_set() or (cancelled is not None and cancelled.is_set()):
                 raise InferenceCancelled('Job cancelled before execution')
             if self.process is None or not self.process.is_alive():

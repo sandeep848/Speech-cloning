@@ -69,3 +69,17 @@ def test_data_directory_lock_stays_held_through_shutdown(tmp_path):
     assert second.acquire() is True
     assert second.begin_release() is True
     second.finish_release()
+
+
+def test_unreaped_process_is_never_reused():
+    from isolated_workers import TerminationFailure
+    class Unstoppable:
+        def is_alive(self):return True
+        def terminate(self):pass
+        def kill(self):pass
+        def join(self,timeout=None):pass
+    worker=Worker('test',handler)
+    process=Unstoppable();worker.process=process
+    with pytest.raises(TerminationFailure):worker.close()
+    assert worker.process is process
+    with pytest.raises(TerminationFailure):worker.call('must-not-start',timeout=.1)

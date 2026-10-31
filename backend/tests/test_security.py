@@ -251,13 +251,15 @@ def test_explicit_reference_pins_its_original_transcript(accounts, monkeypatch):
     monkeypatch.setattr(backend.direct_inference,'model_availability',lambda _: {'configured':True})
     seen=[]
     def synthesize(model,text,ref,transcript,path):
+        from models import generation_language
+        assert generation_language() == 'English'
         seen.append(transcript);path.write_bytes(audio())
     monkeypatch.setattr(backend.direct_inference,'generate_audio',synthesize)
     first=a.post('/api/references/upload',files={'file':('x.wav',audio(),'audio/wav')},data={'transcript':'Original transcript','language':'English'})
     ref=first.json()['reference']['id']
     assert first.json()['language']=='English'
     a.post('/api/references/upload',files={'file':('x.wav',audio(),'audio/wav')},data={'transcript':'Replacement transcript','language':'English'})
-    result=a.post('/api/generations',json={'text':'Test','reference_id':ref,'language':'English','models':['cosyvoice3']})
+    result=a.post('/api/generations',json={'text':'Test','reference_id':ref,'language':'en','models':['cosyvoice3']})
     assert result.status_code==202,result.text
     for _ in range(100):
         if a.get('/api/generations/'+result.json()['id']).json()['jobs'][0]['status']=='complete':break

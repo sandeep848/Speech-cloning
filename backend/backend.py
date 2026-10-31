@@ -38,7 +38,7 @@ import security
 import schema
 import artifact_storage
 from generation_config import GenerationConfig, current as generation_config, effective_parameters
-from isolated_workers import WorkerPool, InferenceCancelled
+from isolated_workers import WorkerPool, InferenceCancelled, TerminationFailure
 from export_response import PrivateExportResponse
 from security_headers import SecurityHeaders
 from runtime_lock import DataLock
@@ -736,11 +736,18 @@ async def run_job(job_id, model, text, path, reference_text, language="German", 
         if future is not None:
             try:
                 await asyncio.shield(future)
+            except TerminationFailure:
+                logger.critical("Worker could not be reaped job=%s; reservation retained", job_id)
+                raise
             except Exception:
                 pass
         (ROOT / "audio" / f"{job_id}.wav").unlink(missing_ok=True)
         update_job(job_id, "cancelled", error="Generation cancelled")
         raise
+    except TerminationFailure:
+        logger.critical("Worker termination failed job=%s; admission remains reserved", job_id)
+        with db() as c:
+            c.execute("UPDATE jobs SET error='Worker termination needs administrator intervention',updated=? WHERE id=?", (time.time(),job_id))
     except InferenceCancelled:
         update_job(job_id, "cancelled", error="Generation cancelled")
     except TimeoutError:
@@ -764,7 +771,9 @@ async def cancel_job(job_id: str):
         raise HTTPException(409, "Job is no longer active in this process")
     if not task.cancel():
         raise HTTPException(409, "Job already finished")
-    await asyncio.gather(task, return_exceptions=True)
+    results = await asyncio.gather(task, return_exceptions=True)
+    if any(isinstance(result, TerminationFailure) for result in results):
+        raise HTTPException(503, "Worker termination needs administrator intervention")
     return {"id": job_id, "status": "cancelled"}
 
 
@@ -799,7 +808,7 @@ async def _generate_impl(request: GenerateRequest, deferred=None):
         m not in MODEL_IDS for m in request.models
     ):
         raise HTTPException(422, "Unsupported or duplicate models")
-    req_lang = request.language or os.getenv("GENERATION_LANGUAGE", "German")
+    req_lang = {"de":"German", "en":"English"}.get(request.language, request.language)
     selected_reference = request.reference_id
     effective_transcript = request.reference_text
     if not selected_reference:
