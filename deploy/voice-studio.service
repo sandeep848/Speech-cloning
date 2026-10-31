@@ -9,6 +9,15 @@ Type=simple
 User=voice-studio
 WorkingDirectory=/srv/voice-studio/backend
 Environment=APP_ENV=production
+Environment=VOICE_STUDIO_DATA=/srv/voice-studio/data
+Environment=VOICE_STUDIO_MODEL_CACHE=/srv/voice-studio/models
+Environment=HF_HOME=/srv/voice-studio/models/hf
+Environment=TTS_HOME=/srv/voice-studio/models/tts
+Environment=COSY_MODEL_DIR=/srv/voice-studio/models/cosyvoice3
+Environment=QWEN_MODEL_DIR=/srv/voice-studio/models/qwen3
+Environment=EVAL_MODELS_DIR=/srv/voice-studio/models/evaluators
+Environment=SCOREQ_CACHE=/srv/voice-studio/models/scoreq
+Environment=XDG_CACHE_HOME=/srv/voice-studio/models/cache
 UMask=0077
 EnvironmentFile=/srv/voice-studio/backend/.env
 ExecStart=/srv/voice-studio/.venv/bin/python -m uvicorn backend:app --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1

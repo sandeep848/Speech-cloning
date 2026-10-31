@@ -114,6 +114,7 @@ async function fits(page, name) {
       await page.getByRole('button',{name:'Listening Evaluation',exact:true}).click();
       await page.getByLabel('Recording Engine').selectOption('job-0');
       await page.getByLabel('MOS Score').selectOption('4');
+      await page.getByLabel('Reviewer identifier').fill('Synthetic reviewer '+width);
       await page.getByRole('button',{name:'Submit Score',exact:true}).click();
       await page.getByText('Rating successfully saved.',{exact:true}).waitFor();
       await fits(page,`${width}: evaluation`);

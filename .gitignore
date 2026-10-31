@@ -20,3 +20,9 @@ backend/models/cosyvoice3/repo
 backend/models/evaluators/whisper/
 backend/models/evaluators/ecapa/
 backend/models/evaluators/scoreq/
+
+backend/reference/*.txt
+
+.coverage
+coverage.xml
+htmlcov/

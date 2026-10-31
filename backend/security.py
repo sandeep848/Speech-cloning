@@ -211,6 +211,12 @@ class RateLimiter:
             with sqlite3.connect(self.database) as c:
                 c.execute('DELETE FROM rate_limits')
 
+    def blocked(self, key, maximum):
+        digest = hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()
+        with sqlite3.connect(self.database, timeout=5) as c:
+            row = c.execute('SELECT count FROM rate_limits WHERE key=? AND expires>?', (digest, time.time())).fetchone()
+            return bool(row and row[0] >= maximum)
+
     def allow(self, key, maximum, seconds=60):
         if self.database is None:
             raise RuntimeError('Rate limiter database is not initialized')

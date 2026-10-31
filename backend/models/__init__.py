@@ -8,7 +8,7 @@ import threading
 import traceback
 from pathlib import Path
 
-from models.pacing import get_speech_rate, plan_speech, slow_speech
+from models.pacing import get_speech_rate as get_speech_rate, plan_speech as plan_speech, slow_speech
 
 from models.qwen3 import model as qwen3_adapter
 from models.cosyvoice3 import model as cosyvoice3_adapter
@@ -70,7 +70,7 @@ def _package_present(model_id: str) -> bool:
             or (
                 Path(
                     os.getenv(
-                        "COSYVOICE_SOURCE", str(Path.home() / "Downloads/CosyVoice")
+                        "COSYVOICE_SOURCE", str(cosyvoice3_adapter.REPO_DIR)
                     )
                 ).expanduser()
                 / "cosyvoice"
@@ -91,7 +91,7 @@ def model_availability(model_id: str) -> dict:
     if not detail and state == "loading":
         detail = "Downloading/loading model weights into memory…"
     elif not detail and not installed:
-        detail = f"Missing package for {model_id}; run python start.py to set up."
+        detail = f"Missing package for {model_id}; install the reviewed model environment and provision weights."
     return {
         "configured": ready,
         "ready": ready,
@@ -276,7 +276,8 @@ def _postprocess_audio(samples, rate: int, target_samples=None):
     return samples
 
 
-_timing_records: dict[str, dict[str, float]] = {}
+from models.cache import BoundedCache
+_timing_records = BoundedCache(1024)
 
 
 def record_timing(path: str | Path, key: str, value: float) -> None:

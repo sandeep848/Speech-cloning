@@ -1,11 +1,14 @@
+Current audit fixes and upgrade requirements: [docs/AUDIT_FIXES.md](docs/AUDIT_FIXES.md).
+Private reference files are provisioned separately using REFERENCE_DIR. No default person's voice is included.
+
 # Voice Comparison Studio
 
-Current corrections and validation superseding older findings: [hardening follow-up](docs/HARDENING_FOLLOWUP.md). Work remains on the existing branch and PR #2.
+Earlier corrections and validation: [hardening follow-up](docs/HARDENING_FOLLOWUP.md). Current upgrade requirements are in [audit fixes](docs/AUDIT_FIXES.md).
 
 
 **Security candidate: internal testing only.** Private APIs now require configured authentication. For distinct user accounts use `AUTH_MODE=accounts`; a shared API token identifies one shared principal. Anonymous localhost use must be explicitly enabled with `DEV_ALLOW_ANONYMOUS=1` and is forbidden in production.
 
-See [implementation and validation evidence](docs/IMPLEMENTATION_REPORT.md), [deployment/configuration](docs/DEPLOYMENT.md), [API compatibility changes](docs/API.md), [backup recovery](docs/BACKUP_AND_RECOVERY.md) and [known limitations](docs/KNOWN_LIMITATIONS.md). The complete public-release requirements in the master prompt are not finished or certified.
+See [implementation and validation evidence](docs/IMPLEMENTATION_REPORT.md), [deployment/configuration](docs/DEPLOYMENT.md), [API compatibility changes](docs/API.md), [backup recovery](docs/BACKUP_AND_RECOVERY.md) and [known limitations](docs/KNOWN_LIMITATIONS.md). Production readiness requires real-model and deployment validation.
 
 The launcher no longer installs packages without `--setup` (development only), automatically switches interpreters, or sets a process-wide unsafe Torch checkpoint-loading override. Install a reviewed compatible environment first. This deliberately changes the old startup instructions below; follow the deployment document for the candidate.
 
@@ -125,7 +128,7 @@ Speech-cloning/
 
 ## Automated Multi-Metric Evaluation Suite
 
-All generated recordings are automatically benchmarked against the target reference voice:
+With AUTO_EVALUATE=1, generated recordings are evaluated using the enabled and successfully initialized evaluators. Missing evaluators are reported explicitly:
 
 - **Speech Intelligibility & Accuracy**:
   - **Word Error Rate (WER)**: Whisper transcription accuracy normalized via `jiwer`.

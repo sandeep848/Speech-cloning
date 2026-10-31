@@ -7,7 +7,7 @@ import shutil
 import wave
 from pathlib import Path
 
-EVAL_MODELS_DIR = Path(__file__).resolve().parent / "models" / "evaluators"
+EVAL_MODELS_DIR = Path(os.getenv("EVAL_MODELS_DIR", str(Path(__file__).resolve().parent / "models" / "evaluators"))).resolve()
 
 
 class Evaluator:
@@ -70,7 +70,7 @@ class Evaluator:
 
                 scoreq_dir = EVAL_MODELS_DIR / "scoreq"
                 scoreq_dir.mkdir(parents=True, exist_ok=True)
-                user_onnx_dir = Path.home() / ".cache/scoreq/onnx-models"
+                user_onnx_dir = Path(os.getenv("SCOREQ_CACHE", str(Path.home() / ".cache/scoreq/onnx-models")))
                 user_onnx_dir.mkdir(parents=True, exist_ok=True)
                 # Sync any bundled ONNX files between backend/models/evaluators/scoreq and ~/.cache/scoreq
                 for src_dir, dst_dir in (
@@ -132,6 +132,10 @@ class Evaluator:
                     )
                     dnsmos_file = Path(dl)
 
+                import hashlib
+                expected = '269fbebdb513aa23cddfbb593542ecc540284a91849ac50516870e1ac78f6edd'
+                if hashlib.sha256(dnsmos_file.read_bytes()).hexdigest() != expected:
+                    raise RuntimeError('DNSMOS checkpoint does not match the reviewed Microsoft model')
                 opts = ort.SessionOptions()
                 opts.inter_op_num_threads = 2
                 opts.intra_op_num_threads = 2
@@ -145,7 +149,7 @@ class Evaluator:
 
         self.initialization_errors = dict(self.errors)
 
-    def evaluate(self, output: str, reference: str, text: str, elapsed: float, ttft_ms: float | None = None):
+    def evaluate(self, output: str, reference: str, text: str, elapsed: float, ttft_ms: float | None = None, language: str | None = None):
         self.errors = dict(self.initialization_errors)
         measures = []
         with wave.open(output, "rb") as w:
@@ -160,7 +164,7 @@ class Evaluator:
         # Non-streaming engines do not expose token latency. Only report an
         # observed completed-audio-chunk time when the adapter recorded one.
         from models import get_timing
-        first_audio = get_timing(output, "first_audio_ms")
+        first_audio = ttft_ms if ttft_ms is not None else get_timing(output, "first_audio_ms")
         if first_audio is not None:
             measures.append(("first_audio_ms", first_audio, "clock-first-audio-chunk"))
 
@@ -168,7 +172,10 @@ class Evaluator:
             try:
                 import jiwer
 
-                transcription = self.asr.transcribe(output, fp16=False).get("text", "")
+                asr_options = {'fp16': False}
+                if language:
+                    asr_options['language'] = {'German': 'de', 'English': 'en', 'de': 'de', 'en': 'en'}[language]
+                transcription = self.asr.transcribe(output, **asr_options).get("text", "")
                 normalizer = jiwer.Compose(
                     [
                         jiwer.ToLowerCase(),
@@ -251,24 +258,29 @@ class Evaluator:
                 if sr != 16000:
                     wav = librosa.resample(wav, orig_sr=sr, target_sr=16000)
 
-                CHUNK = 144160
-                if len(wav) < CHUNK:
-                    padded = np.pad(wav, (0, CHUNK - len(wav)))
-                    chunks = [padded]
-                else:
-                    hop = CHUNK // 2
-                    chunks = []
-                    for i in range(0, len(wav) - CHUNK + 1, hop):
-                        chunks.append(wav[i : i + CHUNK])
-                    if len(wav) % hop != 0:
-                        chunks.append(wav[-CHUNK:])
-
-                batch = np.array(chunks, dtype=np.float32)
-                out = self.dnsmos.run(None, {self.dnsmos.get_inputs()[0].name: batch})[0]
-                avg = out.mean(axis=0)
-                measures.append(("dnsmos_sig", float(round(avg[0], 3)), "dnsmos-p835"))
-                measures.append(("dnsmos_bak", float(round(avg[1], 3)), "dnsmos-p835"))
-                measures.append(("dnsmos_ovrl", float(round(avg[2], 3)), "dnsmos-p835"))
+                # Microsoft DNSMOS P.835 non-personalized preprocessing/calibration.
+                # Checkpoint identity must be verified against the upstream model.
+                chunk = 144160
+                if not len(wav):
+                    raise ValueError('Empty audio')
+                while len(wav) < chunk:
+                    wav = np.concatenate((wav, wav))
+                hops = int(np.floor(len(wav) / 16000) - 9.01) + 1
+                calibrated = []
+                raw = []
+                for i in range(hops):
+                    segment = wav[i * 16000:i * 16000 + chunk]
+                    values = self.dnsmos.run(None, {self.dnsmos.get_inputs()[0].name: np.asarray(segment, dtype=np.float32)[None, :]})[0][0]
+                    raw.append(values)
+                    calibrated.append([
+                        np.polyval([-0.08397278, 1.22083953, 0.0052439], values[0]),
+                        np.polyval([-0.13166888, 1.60915514, -0.39604546], values[1]),
+                        np.polyval([-0.06766283, 1.11546468, 0.04602535], values[2]),
+                    ])
+                for suffix, values in (('_raw', raw), ('', calibrated)):
+                    average = np.mean(values, axis=0)
+                    for index, name in enumerate(('sig', 'bak', 'ovrl')):
+                        measures.append(('dnsmos_' + name + suffix, float(average[index]), 'dnsmos-p835-reference'))
             except Exception as e:
                 self.errors["dnsmos_predict"] = str(e)
 

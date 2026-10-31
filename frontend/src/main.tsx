@@ -4,6 +4,7 @@ import './style.css';
 
 const API = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 let sessionToken = '';
+let sessionEpoch = 0;
 const crossSiteApi = !!API && new URL(API, window.location.href).origin !== window.location.origin;
 function sessionHeaders(): Record<string, string> { return sessionToken ? { Authorization: 'Session ' + sessionToken } : {}; }
 
@@ -231,8 +232,10 @@ const PRESET_SCRIPTS_EN = [
 ];
 
 async function req(path: string, options: RequestInit = {}) {
+  const epoch = sessionEpoch;
   const response = await fetch(API + path, { ...options, headers: { 'X-Studio-CSRF': '1', ...sessionHeaders(), ...options.headers }, credentials: 'include' });
   const body = await response.json().catch(() => ({ detail: response.statusText }));
+  if (epoch !== sessionEpoch) throw new Error('Session changed; previous request discarded');
   if (!response.ok) {
     if (response.status === 401 && path !== '/api/session') {
       window.dispatchEvent(new Event('studio-login'));
@@ -278,12 +281,17 @@ interface ReferenceInfo {
 }
 
 async function privateBlob(path: string, signal?: AbortSignal) {
+  const epoch = sessionEpoch;
   const response = await fetch(API + path, { headers: sessionHeaders(), credentials: 'include', signal });
+  if (epoch !== sessionEpoch) throw new Error('Session changed; previous request discarded');
+  if (epoch !== sessionEpoch) throw new Error('Session changed');
   if (!response.ok) {
     if (response.status === 401) window.dispatchEvent(new Event('studio-login'));
     throw new Error('Private download failed (' + response.status + ')');
   }
-  return response.blob();
+  const blob = await response.blob();
+  if (epoch !== sessionEpoch) throw new Error('Session changed');
+  return blob;
 }
 
 async function downloadPrivate(event: React.MouseEvent<HTMLAnchorElement>, path: string, filename: string) {
@@ -321,6 +329,7 @@ function App() {
   const [models, setModels] = useState<Model[]>(defaults);
   const [active, setActive] = useState<string[]>(savedActive);
   const [reference, setReference] = useState<ReferenceInfo | null>(null);
+  const [savedReferences, setSavedReferences] = useState<{id:string;filename:string}[]>([]);
   const [revealed, setRevealed] = useState(false);
   const [text, setText] = useState('');
   const [speechRate, setSpeechRate] = useState('');
@@ -342,9 +351,11 @@ function App() {
   const [password, setPassword] = useState('');
   const [authMode, setAuthMode] = useState('token');
   const [authenticated, setAuthenticated] = useState(false);
-  useEffect(() => { req('/api/session').then(s => { setAuthMode(s.auth_mode || 'token'); setAuthenticated(!!s.authenticated && s.principal !== 'development'); }).catch(() => {}); }, []);
+  const authenticatedRef = useRef(false);
+  useEffect(() => { req('/api/session').then(s => { setAuthMode(s.auth_mode || 'token'); authenticatedRef.current = !!s.authenticated && s.principal !== 'development'; setAuthenticated(authenticatedRef.current); }).catch(() => {}); }, []);
   const [sessionVersion, setSessionVersion] = useState(0);
   const [rating, setRating] = useState(5);
+  const [raterName, setRaterName] = useState('');
   const [ratingJob, setRatingJob] = useState('');
   const [agreement, setAgreement] = useState('');
   const [selectedMetricModel, setSelectedMetricModel] = useState<string>('all');
@@ -360,7 +371,13 @@ function App() {
   const eligible = active.filter((id) => models.find((m) => m.id === id)?.configured);
 
   useEffect(() => {
-    const listener = () => setLoginRequired(true);
+    const listener = () => {
+      if (authenticatedRef.current) sessionEpoch += 1;
+      authenticatedRef.current = false; sessionToken = '';
+      setAuthenticated(false); setLoginRequired(true);
+      setText(''); setReference(null); setJobs([]); setBatchId(''); setMetrics({}); setSavedReferences([]);
+      setAgreement(''); setRatingJob(''); setRaterName(''); localStorage.removeItem('voice.batch');
+    };
     window.addEventListener('studio-login', listener);
     return () => window.removeEventListener('studio-login', listener);
   }, []);
@@ -634,10 +651,11 @@ function App() {
   }
 
   async function saveRating() {
+    if (!raterName.trim()) { setNotice('Enter a reviewer identifier before saving a rating.'); return; }
     try {
       await post('/api/ratings', {
         job_id: ratingJob,
-        rater: 'Evaluator',
+        rater: raterName.trim(),
         category: 'naturalness',
         rating,
       });
@@ -790,8 +808,11 @@ function App() {
             {authenticated && <button onClick={async () => {
               try {
                 await req('/api/session', { method: 'DELETE' });
-                sessionToken = ''; setAuthenticated(false); setLoginRequired(true);
-                setReference(null); setJobs([]); setBatchId(''); setMetrics({});
+                if (authenticatedRef.current) sessionEpoch += 1;
+      authenticatedRef.current = false; sessionToken = ''; setAuthenticated(false); setLoginRequired(true);
+                setText(''); setAgreement(''); setRatingJob(''); setRaterName(''); localStorage.removeItem('voice.batch');
+                setSessionVersion(v => v + 1);
+                setReference(null); setJobs([]); setBatchId(''); setMetrics({}); setSavedReferences([]);
               } catch (error) { setNotice(String(error)); }
             }}>Sign out</button>}
             <span className="app-status">
@@ -802,6 +823,35 @@ function App() {
         </nav>
 
         <main>
+          {authenticated && <details className="panel">
+            <summary>Manage saved data</summary>
+            <p>Delete completed generations before removing references used by them.</p>
+            <button disabled={!batchId || busy} onClick={async () => {
+              try {
+                await req('/api/generations/' + batchId, {method:'DELETE'});
+                setBatchId(''); setJobs([]); setMetrics({}); setText('');
+                localStorage.removeItem('voice.batch'); setNotice('Generation deleted.');
+              } catch (error) { setNotice(String(error)); }
+            }}>Delete current generation</button>
+            <button onClick={async () => {
+              try { setSavedReferences(await req('/api/references')); }
+              catch (error) { setNotice(String(error)); }
+            }}>Show uploaded references</button>
+            {savedReferences.map(item => <div key={item.id}>
+              <span>{item.filename} ({item.id.slice(0,8)}) </span>
+              <button onClick={async () => {
+                try {
+                  await req('/api/references/' + item.id, {method:'DELETE'});
+                  setSavedReferences(items => items.filter(x => x.id !== item.id));
+                  if (reference?.id === item.id) { setReference(null); setSessionVersion(v => v + 1); }
+                  setNotice('Reference deleted.');
+                } catch (error) { setNotice(String(error)); }
+              }}>Delete reference</button>
+            </div>)}
+          </details>}
+          {tab === 'Evaluation' && <label className="reviewer-name">Reviewer identifier
+            <input value={raterName} onChange={e => setRaterName(e.target.value)} maxLength={100} placeholder="Use a different identifier for each reviewer" />
+          </label>}
           {notice && (
             <div className="notice" role="alert">
               <span>{notice}</span>
@@ -816,9 +866,10 @@ function App() {
                 e.preventDefault();
                 try {
                   const session = await post('/api/session', { ...(authMode === 'accounts' ? { username, password } : { token }), transport: crossSiteApi ? 'bearer' : 'cookie' });
-                  sessionToken = session.session_token || '';
+                  sessionEpoch += 1; authenticatedRef.current = true; sessionToken = session.session_token || '';
+                  setText(''); setAgreement(''); setRatingJob(''); setRaterName(''); localStorage.removeItem('voice.batch');
                   setAuthenticated(true);
-                  setReference(null); setJobs([]); setBatchId(''); setMetrics({});
+                  setReference(null); setJobs([]); setBatchId(''); setMetrics({}); setSavedReferences([]);
                   setPassword('');
                   setToken('');
                   setLoginRequired(false);

@@ -1,24 +1,4 @@
--- Current schema; inventory only. Use schema.py for backed-up legacy migrations.
-CREATE INDEX artifact_sizes_owner ON artifact_sizes(owner_id);
-
-CREATE INDEX batch_generation_child ON batch_generations(generation_id);
-
-CREATE INDEX batches_reference ON batches(reference_id);
-
-CREATE INDEX jobs_batch ON jobs(batch_id);
-
-CREATE INDEX jobs_cache ON jobs(cache_key, status);
-
-CREATE INDEX jobs_status ON jobs(status);
-
-CREATE INDEX rate_limits_expiry ON rate_limits(expires);
-
-CREATE INDEX reservations_owner ON storage_reservations(owner_id);
-
-CREATE INDEX resource_owner_index ON resource_owners(owner_id, kind);
-
-CREATE INDEX sessions_expiry ON sessions(expires);
-
+-- Generated schema inventory; migrations remain managed by schema.py.
 CREATE TABLE accounts (
         id TEXT PRIMARY KEY REFERENCES principals(id),
         username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
@@ -42,6 +22,8 @@ CREATE TABLE evaluation_errors (job_id TEXT NOT NULL REFERENCES jobs(id), name T
 CREATE TABLE evaluation_runs (job_id TEXT PRIMARY KEY NOT NULL REFERENCES jobs(id), status TEXT NOT NULL, error TEXT, updated REAL NOT NULL);
 
 CREATE TABLE human_ratings (job_id TEXT NOT NULL REFERENCES jobs(id), rater TEXT NOT NULL, category TEXT NOT NULL, rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5), PRIMARY KEY(job_id,rater,category));
+
+CREATE TABLE job_observations (job_id TEXT PRIMARY KEY REFERENCES jobs(id), first_audio_ms REAL, language TEXT NOT NULL);
 
 CREATE TABLE job_provenance (job_id TEXT PRIMARY KEY REFERENCES jobs(id), configuration TEXT NOT NULL);
 
@@ -99,3 +81,23 @@ CREATE TABLE user_reference_profiles (
         reference_id TEXT NOT NULL REFERENCES references_audio(id),
         transcript TEXT NOT NULL, PRIMARY KEY(owner_id, language)
     );
+
+CREATE INDEX artifact_sizes_owner ON artifact_sizes(owner_id);
+
+CREATE INDEX batch_generation_child ON batch_generations(generation_id);
+
+CREATE INDEX batches_reference ON batches(reference_id);
+
+CREATE INDEX jobs_batch ON jobs(batch_id);
+
+CREATE INDEX jobs_cache ON jobs(cache_key, status);
+
+CREATE INDEX jobs_status ON jobs(status);
+
+CREATE INDEX rate_limits_expiry ON rate_limits(expires);
+
+CREATE INDEX reservations_owner ON storage_reservations(owner_id);
+
+CREATE INDEX resource_owner_index ON resource_owners(owner_id, kind);
+
+CREATE INDEX sessions_expiry ON sessions(expires);

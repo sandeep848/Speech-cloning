@@ -37,7 +37,6 @@ def test_restore_rejects_traversal(tmp_path):
 
 
 def test_age_encrypted_round_trip(tmp_path):
-    import os
     import shutil
     import subprocess
     import sys

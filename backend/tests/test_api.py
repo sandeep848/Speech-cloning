@@ -1,5 +1,4 @@
 import os
-import shutil
 import sys
 import tempfile
 import threading
@@ -89,7 +88,7 @@ def test_evaluation_saved_and_deduplicated(monkeypatch):
         class FakeEvaluator:
             errors = {}
 
-            def evaluate(self, output, reference, text, elapsed):
+            def evaluate(self, output, reference, text, elapsed, **options):
                 assert elapsed == 2.5
                 return [
                     ("duration_s", 1.0, "wav"),
@@ -308,7 +307,7 @@ def test_https_cross_site_login_cookie(monkeypatch):
         assert response.status_code == 200
         cookie = response.headers["set-cookie"].lower()
         assert "secure" in cookie and "httponly" in cookie
-        assert "samesite=none" in cookie
+        assert "samesite=lax" in cookie
         assert api.get("/api/models", headers={"Origin": origin}).status_code == 200
 
 

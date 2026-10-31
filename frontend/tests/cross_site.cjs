@@ -39,7 +39,8 @@ const wav=Buffer.alloc(44+4800);wav.write('RIFF');wav.writeUInt32LE(wav.length-8
       if(pathname==='/api/models')body=[{id:'qwen3',name:'Qwen3-TTS',configured:true,ready:true}];
       else if(pathname==='/api/reference-profile')body={reference:{id:'reference',filename:'reference.wav'}};
       else if(pathname==='/api/workspace')body={active:['qwen3']};
-      else if(pathname.startsWith('/api/generations'))body={id:'generation',text:'A private fixture generation.',jobs:[{id:'job',model_id:'qwen3',status:'complete',audio_url:'/api/recordings/job/audio',runtime_seconds:.1}]};
+      else if(pathname==='/api/generations'&&request.method()==='POST')body={id:'generation',jobs:[{id:'job',model_id:'qwen3',status:'pending'}]};
+      else if(pathname.startsWith('/api/generations/'))body={id:'generation',text:'A private fixture generation.',jobs:[{id:'job',model_id:'qwen3',status:'complete',audio_url:'/api/recordings/job/audio',runtime_seconds:.1}]};
       else if(pathname.startsWith('/api/evaluations'))body={metrics:[],errors:[],status:'completed'};
       return route.fulfill({headers,json:body});
     });
@@ -49,7 +50,9 @@ const wav=Buffer.alloc(44+4800);wav.write('RIFF');wav.writeUInt32LE(wav.length-8
     await page.getByRole('button',{name:'Connect Session',exact:true}).click();
     await page.getByText('German Reference Active',{exact:true}).waitFor();
     await page.locator('#speech').fill('A private fixture generation.');
+    const generationRequest = page.waitForResponse(r => new URL(r.url()).pathname === '/api/generations' && r.request().method() === 'POST');
     await page.getByRole('button',{name:'Generate Comparison',exact:true}).click();
+    assert.equal((await generationRequest).status(),200);
     await page.locator('.voice-card:not(.reference) audio').first().waitFor();
     const downloadPromise=page.waitForEvent('download');
     await page.locator('.btn-card-download').first().click();
@@ -61,6 +64,8 @@ const wav=Buffer.alloc(44+4800);wav.write('RIFF');wav.writeUInt32LE(wav.length-8
     await page.getByRole('button',{name:'Connect Session',exact:true}).waitFor();
     assert.equal(logouts,1);
     assert.equal(await page.locator('audio').count(),0);
+    assert.equal(await page.locator('#speech').inputValue(),'');
+    assert.equal(await page.evaluate(()=>localStorage.getItem('voice.batch')),null);
     console.log('PASS cross-site: no-cookie login, authenticated playback/download, no persistent token, revoked logout');
   } finally {if(browser)await browser.close();server.kill();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

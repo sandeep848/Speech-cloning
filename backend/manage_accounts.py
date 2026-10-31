@@ -20,8 +20,8 @@ def valid_password(password):
 def main():
     load_dotenv(Path(__file__).parent / '.env', override=False)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['create', 'reset-token', 'disable', 'revoke', 'claim-legacy'])
-    parser.add_argument('username')
+    parser.add_argument('action', choices=['create', 'reset-token', 'disable', 'enable', 'list', 'revoke', 'claim-legacy'])
+    parser.add_argument('username', nargs='?')
     parser.add_argument('--admin', action='store_true')
     args = parser.parse_args()
     db_path = Path(os.getenv('VOICE_STUDIO_DATA', Path(__file__).parent/'data')) / 'studio.sqlite3'
@@ -31,6 +31,12 @@ def main():
         c.row_factory = sqlite3.Row
         c.execute('PRAGMA foreign_keys=ON')
         security.initialize(c)
+        if args.action == 'list':
+            for account in c.execute('SELECT username,role,disabled FROM accounts ORDER BY username'):
+                print(account['username'], account['role'], 'disabled' if account['disabled'] else 'enabled')
+            return
+        if not args.username:
+            raise ValueError('A username is required')
         name = args.username.casefold().strip()
         if not name or len(name)>100:
             raise ValueError('Invalid username')
@@ -64,7 +70,7 @@ def main():
                     c.execute(statement, (kind,row['id']))
             else:
                 c.execute('UPDATE accounts SET credential_version=credential_version+1,disabled=? WHERE id=?',
-                          (1 if args.action=='disable' else row['disabled'],row['id']))
+                          (1 if args.action=='disable' else 0 if args.action=='enable' else row['disabled'],row['id']))
                 c.execute('DELETE FROM sessions WHERE owner_id=?', (row['id'],))
     print('Account operation completed')
 
