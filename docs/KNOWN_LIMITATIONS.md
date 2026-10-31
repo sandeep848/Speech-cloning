@@ -5,7 +5,7 @@ Release status: **Not ready** for the complete requested public multi-user platf
 - Real Qwen, CosyVoice, XTTS and evaluator weights were not executed. No GPU, naturalness, latency or metric improvement is claimed. Removal of the global unsafe Torch-loading override can expose upstream checkpoint incompatibility requiring a narrowly reviewed remedy.
 - Model dependencies, executable CosyVoice source, all checkpoint hashes and GPU/Windows compatibility are not locked/validated. Existing dependency ranges are not a production lockfile. The API/test lock is separate.
 - Local encrypted database/audio recovery and ciphertext-integrity rejection pass; off-host scheduled operation is still unverified.
-- Browser responsive/security flows could not be executed: Chromium download returned a truncated archive. The frontend builds, but visual correctness, cookies on actual Pages and final CSP require browser/staging tests.
+- Local Chromium download was truncated, but the GitHub runner passed the fixture-driven responsive browser suite at all ten widths. Actual Pages/account cookie flows, final CSP and exhaustive accessibility/error paths still need staging validation.
 - HTTPS, reverse proxy, filesystem/service hardening, off-host encrypted backups, restore alerts, retention and public token/session rotation have not been validated on a deployed server. Templates are not active services.
 - Gitleaks found no leaks in the current working tree. The separate history scan and full model dependency audit are reported in IMPLEMENTATION_REPORT.md; automated scans cannot prove absence of vulnerabilities.
 - Automatic approval review blocked Semgrep because it could contact semgrep.dev and disclose repository/scan data. The scan is unverified and was not retried or moved into an automatic CI job.
@@ -19,4 +19,5 @@ Release status: **Not ready** for the complete requested public multi-user platf
 - Request controls use the adapters' existing parameter contracts. CosyVoice temperature is unsupported. Per-model temperature UI, full effective-parameter provenance, pause overrides and complete model-revision cache identity require further work.
 - Blinded/randomized listening tests, a validated expanded German benchmark and empirical research deliverables remain unperformed.
 - Public Git history already contains reference audio/transcripts. API security does not hide GitHub-hosted files. Consent/privacy review and any history action require explicit operator authorization.
+- Dependency Review currently fails because the repository Dependency graph is disabled. Enable it in repository security analysis settings and rerun; this gate was not bypassed.
 - Branch protections and required checks are not configured automatically. Review the candidate PR before merging. Do not enable production deployment until blockers relevant to its scope are resolved.

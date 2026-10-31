@@ -168,3 +168,15 @@ Exact local, account, production preparation, Pages/configuration, backup and ro
 ## K. Release status
 
 **Not ready** for the master prompt's public-release definition of done. The candidate is suitable for code review and isolated internal testing of the implemented changes. Keep the pull request in draft until material blockers for the intended release are resolved. No merge or public deployment is authorized by this report.
+
+## Remote CI follow-up (same tested code)
+
+The initial PR head was `542dd15b91929a85df2f6d34fdf61d07d12d20e2`, with published tree `950236192883397082eb3d4c84f338d0b65fc05d`, byte-for-byte equal to the locally tested tree. The connected GitHub service published the five logical commits because shell git had no write credential. Documentation follow-ups do not change tested application code.
+
+[Verify run](https://github.com/sandeep848/Speech-cloning/actions/runs/41198023837): backend and frontend jobs succeeded. The GitHub runner downloaded Chromium and passed the existing fixture-driven responsive browser suite at 320, 360, 390, 430, 600, 768, 820, 1024, 1280 and 1440 pixels. This resolves the local browser-install blocker for that suite only; deployed account/cookie/CSP/accessibility flows remain unverified.
+
+[Security run](https://github.com/sandeep848/Speech-cloning/actions/runs/41198023851): authentication/isolation (73 passed, encrypted test explicitly skipped there), dedicated encrypted backup/restore, API dependency audit, secret scan and Bandit high-severity gate all succeeded. The dedicated backup job installs age and tests the encrypted recovery path separately.
+
+Dependency Review **failed** because GitHub reported Dependency graph disabled/unsupported for the repository. This is not a vulnerability finding or a passing review. Enable Dependency graph in [repository security analysis settings](https://github.com/sandeep848/Speech-cloning/settings/security_analysis), then rerun the gate. No gate was removed, suppressed or made non-blocking to hide this failure. The connected tools do not expose this repository-administration setting.
+
+Semgrep remains blocked by automatic approval review and unverified. Public-release status remains Not ready.
