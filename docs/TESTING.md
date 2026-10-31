@@ -1,5 +1,8 @@
 # Test execution
 
+Current corrections and validation superseding older findings: [hardening follow-up](HARDENING_FOLLOWUP.md). Work remains on the existing branch and PR #2.
+
+
 From the repository root, with a separate virtual environment:
 
 ```bash
@@ -23,3 +26,5 @@ Fixtures use temporary SQLite databases, randomly unique synthetic account ident
 Security tools are separate from inference dependencies. Run pip-audit against both the API lock and the final model environment, Bandit, the repository Semgrep rules, a broader reviewed Semgrep policy, Gitleaks and npm audit. The completed Semgrep scan combines the four local rules with registry security/Python/JavaScript/TypeScript policies and includes tests. Five findings remain after manual review; see SEMGREP_SCAN.md. This is not a full security assessment. A successful CI run is not production approval.
 
 Encrypted recovery integration requires age and age-keygen on PATH. Without them pytest reports an explicit skip; the dedicated backup CI job installs a checksum-verified age release. The final local run included this integration test.
+
+Current follow-up: 94 local backend tests passed, plus focused schema/backup/language regressions after their final adjustments. Expanded Semgrep reports no findings and Bandit no medium/high findings; raw JSON evidence is retained in validation/. CI also runs tests/cross_site.cjs for explicit no-cookie browser sessions. See HARDENING_FOLLOWUP.md for the authoritative current results.

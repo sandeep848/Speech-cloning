@@ -13,3 +13,7 @@ Per-source/per-account login limits, mutation limits, evaluation queue limits an
 Private responses are not cached. Unexpected errors return generic text and a request ID. Inference and evaluator error details stay in server logs. Diagnostic model availability details may still contain upstream error descriptions; review these before public exposure. Caddy supplies CSP, HSTS, framing restrictions and other headers. Test the actual application and final domain policy; a template is not evidence of verified HTTPS.
 
 Never expose SQLite, backups, private environment files, cache directories or the internal port through a web server. Never enable debug reload in production. Reference recordings already committed to this public repository are publicly downloadable through GitHub, regardless of API access controls. Authorization cannot retroactively hide those public Git objects. Confirm consent and retention separately; no recordings or history have been removed in this change.
+
+## Current follow-up
+
+Limits are now persisted atomically in SQLite and login events are retained without credentials. Production model/evaluation execution is supervised in spawned processes. Same-origin sessions remain HttpOnly cookies; cross-site pages explicitly request an opaque session token held only in page memory and sent through an Authorization header for API/audio/download requests. No token is placed in a URL or browser persistent storage. See HARDENING_FOLLOWUP.md for current controls and remaining validation conditions.

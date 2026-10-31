@@ -1,23 +1,18 @@
-# Known limitations and release blockers
+# Remaining validation and release conditions
 
-Release status: **Not ready** for the complete requested public multi-user platform.
+Current implementation evidence is in [HARDENING_FOLLOWUP.md](HARDENING_FOLLOWUP.md). Older reports describe earlier states; several of their code blockers have now been fixed.
 
-- Real Qwen, CosyVoice, XTTS and evaluator weights were not executed. No GPU, naturalness, latency or metric improvement is claimed. Removal of the global unsafe Torch-loading override can expose upstream checkpoint incompatibility requiring a narrowly reviewed remedy.
-- Model dependencies, executable CosyVoice source, all checkpoint hashes and GPU/Windows compatibility are not locked/validated. Existing dependency ranges are not a production lockfile. The API/test lock is separate.
-- Local encrypted database/audio recovery and ciphertext-integrity rejection pass; off-host scheduled operation is still unverified.
-- Local Chromium download was truncated, but the GitHub runner passed the fixture-driven responsive browser suite at all ten widths. Actual Pages/account cookie flows, final CSP and exhaustive accessibility/error paths still need staging validation.
-- HTTPS, reverse proxy, filesystem/service hardening, off-host encrypted backups, restore alerts, retention and public token/session rotation have not been validated on a deployed server. Templates are not active services.
-- Gitleaks found no leaks in the current working tree. The separate history scan and full model dependency audit are reported in IMPLEMENTATION_REPORT.md; automated scans cannot prove absence of vulnerabilities.
-- The user subsequently authorized Semgrep. The completed expanded scan has five reviewed findings and no parsing errors; none were suppressed. See SEMGREP_SCAN.md and the raw JSON. A zero-finding result or full security certification is not claimed.
-- SQLite legacy tables retain incomplete foreign keys/constraints. Ownership is enforced consistently by application routes and the new ownership tables, but full relational schema migration/recovery and a reviewed data-retention/deletion workflow remain incomplete.
-- Existing unowned data is quarantined; no production data was copied, assigned or deleted. Per-user storage quotas bound counts, not total output bytes. Legacy or benchmark data can exceed those quotas.
-- Thread-based inference cannot safely terminate a hung native model or reclaim GPU resources. Hard timeouts, real cancellation, complete restart-under-load recovery, GPU monitoring and process-isolated jobs remain outstanding. Never release a semaphore while an underlying inference thread is still running.
-- One API worker/service is required. Rate limits are in-memory, reset on restart and are not a distributed WAF. Login has source/account quotas and generic errors; progressive delays, monitoring dashboards and comprehensive compromised-password screening are incomplete.
-- Registration is intentionally absent; users are provisioned offline. Password reset is an administrator-issued one-use token flow, without automated email. No maintained external identity provider has been integrated.
-- The account role field and production admin-reference reload check are a narrow role gate, not a full administrative product. Review role coverage before expanding the API.
-- Research batches defer starting inference until every child passes planning; failed planning removes new rows. Crash recovery during batch planning still needs a persisted parent state.
-- Request controls use the adapters' existing parameter contracts. CosyVoice temperature is unsupported. Per-model temperature UI, full effective-parameter provenance, pause overrides and complete model-revision cache identity require further work.
-- Blinded/randomized listening tests, a validated expanded German benchmark and empirical research deliverables remain unperformed.
-- Public Git history already contains reference audio/transcripts. API security does not hide GitHub-hosted files. Consent/privacy review and any history action require explicit operator authorization.
-- Dependency Review currently fails because the repository Dependency graph is disabled. Enable it in repository security analysis settings and rerun; this gate was not bypassed.
-- Branch protections and required checks are not configured automatically. Review the candidate PR before merging. Do not enable production deployment until blockers relevant to its scope are resolved.
+- Real Qwen, CosyVoice, XTTS and evaluator weights have not run here. No GPU/Windows compatibility, naturalness, quality score or latency improvement is claimed. The complete real-model dependency/checkpoint environment still needs validated revision/hash locking.
+- Production HTTPS, firewall/proxy trust, service account/ACL policy, actual cross-site hosting and resource consumption need staging verification. Unit/process/browser-fixture results are not a public deployment certificate.
+- Off-host backup copy, daily timer operation, alert delivery, retention under failure and measured recovery objectives need the actual destination and host configuration. Local encrypted recovery and hostile-archive tests pass.
+- Existing production databases were unavailable. New stores enforce relational constraints; legacy production stores must pass the explicit backed-up, exclusive-lock migration. Unknown ownership remains quarantined and is never inferred automatically.
+- Production requires one API service/process per data directory. Persistent SQLite rate limits and a store lock enforce this topology; it is not a distributed deployment or an edge bot-protection service.
+- Workers have actual process deadlines/cancellation and restart recovery. Synthetic process tests pass; genuine model GPU allocations, native hangs and Windows behavior still need host-specific tests. Model processes run as the service account and are not a sandbox for malicious checkpoints.
+- Count and byte quotas bound storage. A reviewed user-data retention/deletion policy and maintenance procedure are still required before long-lived public service; no private recordings/history were deleted here.
+- Registration is disabled; account provisioning and expiring one-use reset tokens are managed offline. No external identity provider or email reset service is configured. The password policy is documented and does not claim exhaustive breached-password screening.
+- The listening UI supports private ratings and agreement calculations. A validated randomized/blinded multi-rater study, expanded German benchmark corpus and empirical research outputs still require separate implementation and participants.
+- Public Git history already contains reference audio/transcripts. API authorization cannot hide GitHub-hosted recordings. No history rewrite or recording deletion is authorized/performed in this work.
+- Dependency Review requires enabling the repository Dependency graph. The connector has no operation to change that administrative setting. Its failing check remains intact.
+- Branch protections and production approvals must be configured in GitHub. The candidate remains a draft for review; no merge or public deployment has been performed.
+
+Expanded Semgrep currently reports no findings or parsing errors, without suppression. Bandit has no high/medium findings; low-severity audit results are retained. These results do not prove that all vulnerabilities are absent.

@@ -1,5 +1,8 @@
 # Implementation report — 31 October 2026
 
+Current corrections and validation superseding older findings: [hardening follow-up](HARDENING_FOLLOWUP.md). Work remains on the existing branch and PR #2.
+
+
 ## A. Executive summary
 
 This branch is a tested security/reliability candidate, **not completion of the entire master prompt**. It fixes the confirmed missing-token authentication bypass, adds offline-provisioned accounts, revocable sessions, user-owned resources, immutable reference uploads, request-specific speech controls, cache separation, backup/restore tooling and deployment preparation. Production, hardware, browser and research validations remain blocked or incomplete.

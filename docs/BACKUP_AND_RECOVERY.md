@@ -16,3 +16,5 @@ Restore refuses an existing destination, rejects traversal/symlinks, verifies th
 The provided systemd timer runs daily at 02:00 UTC with a small random delay and catches missed runs. Enable it only after a real encryption/decryption and off-host restore drill. The service has an OnFailure hook for `voice-studio-backup-alert.service`; operators must supply and test that alert integration. No message is sent and no alert service is installed by this branch. A nonzero exit and journal record alone are not a verified alert.
 
 Locally, snapshot/restore and malicious-archive tests pass. A checksum-verified age 1.3.2 release also passed genuine encrypted database/audio backup/restore and ciphertext-tampering rejection. Remote copy, alert delivery, retention under failure and measured RTO remain unverified. The scheduled service has not been installed or activated.
+
+Current implementation stages all age command arguments through generated private paths, hashes files incrementally, opens the source database read-only, publishes encrypted archives atomically/exclusively, and bounds safe restoration. See HARDENING_FOLLOWUP.md for corrected behavior and tests.

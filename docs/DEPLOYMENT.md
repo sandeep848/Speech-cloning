@@ -1,3 +1,5 @@
+Current upgrade requirements and process-isolation settings: [HARDENING_FOLLOWUP.md](HARDENING_FOLLOWUP.md).
+
 # Deployment
 
 Status: development/internal testing only. This change does not deploy production or activate timers.
