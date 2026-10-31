@@ -82,6 +82,10 @@ def test_evaluation_saved_and_deduplicated(monkeypatch):
                 ),
             )
 
+        with backend.db() as c:
+            c.execute("INSERT INTO resource_owners VALUES ('generation',?,'development')", (batch,))
+            c.execute("INSERT INTO resource_owners VALUES ('job',?,'development')", (job,))
+
         class FakeEvaluator:
             errors = {}
 
@@ -155,7 +159,7 @@ def test_auth_cookie_audio_and_cors(monkeypatch):
             ).status_code
             == 206
         )
-        assert api.delete("/api/session").status_code == 200
+        assert api.delete("/api/session", headers={"X-Studio-CSRF": "1"}).status_code == 200
         assert api.get("/api/models").status_code == 401
         assert (
             api.get(
@@ -244,11 +248,15 @@ def test_evaluator_init_errors_persist(monkeypatch, tmp_path):
 def test_batch_trials_bypass_cache_and_track_children(monkeypatch):
     calls = []
 
-    async def fake_generate(request):
+    async def fake_generate(request, deferred=None):
         calls.append(request)
-        return {"id": "trial-" + str(len(calls)), "jobs": []}
+        identifier = "trial-" + str(len(calls))
+        with backend.db() as c:
+            c.execute("INSERT INTO batches VALUES (?,?,?,?)", (identifier, request.text, request.reference_id, time.time()))
+            backend.security.claim(c, "generation", identifier)
+        return {"id": identifier, "jobs": []}
 
-    monkeypatch.setattr(backend, "generate", fake_generate)
+    monkeypatch.setattr(backend, "_generate_impl", fake_generate)
     monkeypatch.setattr(backend, "_batch_generations", lambda batch_id: ["tracked"])
     with TestClient(backend.app) as api:
         reference = api.get("/api/reference-profile").json()["reference"]["id"]

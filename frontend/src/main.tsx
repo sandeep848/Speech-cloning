@@ -3,6 +3,9 @@ import { createRoot } from 'react-dom/client';
 import './style.css';
 
 const API = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+let sessionToken = '';
+const crossSiteApi = !!API && new URL(API, window.location.href).origin !== window.location.origin;
+function sessionHeaders(): Record<string, string> { return sessionToken ? { Authorization: 'Session ' + sessionToken } : {}; }
 
 interface Model {
   id: string;
@@ -133,7 +136,7 @@ const METRIC_DEFS: MetricDef[] = [
   },
   {
     key: 'scoreq',
-    label: 'ScoreQ Quality (MOS)',
+    label: 'ScoreQ predicted quality',
     benchmark: 'Good: > 4.20 | OK: 3.80–4.20 | Bad: < 3.80',
     category: 'Acoustic Quality',
     higherIsBetter: true,
@@ -228,7 +231,7 @@ const PRESET_SCRIPTS_EN = [
 ];
 
 async function req(path: string, options: RequestInit = {}) {
-  const response = await fetch(API + path, { ...options, credentials: 'include' });
+  const response = await fetch(API + path, { ...options, headers: { 'X-Studio-CSRF': '1', ...sessionHeaders(), ...options.headers }, credentials: 'include' });
   const body = await response.json().catch(() => ({ detail: response.statusText }));
   if (!response.ok) {
     if (response.status === 401 && path !== '/api/session') {
@@ -274,13 +277,41 @@ interface ReferenceInfo {
   channels?: number;
 }
 
+async function privateBlob(path: string, signal?: AbortSignal) {
+  const response = await fetch(API + path, { headers: sessionHeaders(), credentials: 'include', signal });
+  if (!response.ok) {
+    if (response.status === 401) window.dispatchEvent(new Event('studio-login'));
+    throw new Error('Private download failed (' + response.status + ')');
+  }
+  return response.blob();
+}
+
+async function downloadPrivate(event: React.MouseEvent<HTMLAnchorElement>, path: string, filename: string) {
+  if (!sessionToken) return;
+  event.preventDefault();
+  try {
+    const blob = await privateBlob(path);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a'); link.href = url; link.download = filename; document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) { window.dispatchEvent(new CustomEvent('studio-download-error', { detail: String(error) })); }
+}
+
 function AudioPlayer({ path, title }: { path: string; title?: string }) {
-  return (
-    <div className="audio-player-box">
-      {title && <span className="audio-player-label">{title}</span>}
-      <audio controls preload="metadata" crossOrigin="use-credentials" src={API + path} />
-    </div>
-  );
+  const [source, setSource] = useState(sessionToken ? '' : API + path);
+  useEffect(() => {
+    if (!sessionToken) { setSource(API + path); return; }
+    const abort = new AbortController(); let objectUrl = '';
+    setSource('');
+    privateBlob(path, abort.signal).then(blob => { if (abort.signal.aborted) return; objectUrl = URL.createObjectURL(blob); setSource(objectUrl); }).catch(error => {
+      if (!abort.signal.aborted) window.dispatchEvent(new CustomEvent('studio-download-error', { detail: String(error) }));
+    });
+    return () => { abort.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [path]);
+  return <div className="audio-player-box">
+    {title && <span className="audio-player-label">{title}</span>}
+    <audio controls preload="metadata" crossOrigin="use-credentials" src={source || undefined} />
+  </div>;
 }
 
 function App() {
@@ -292,13 +323,26 @@ function App() {
   const [reference, setReference] = useState<ReferenceInfo | null>(null);
   const [revealed, setRevealed] = useState(false);
   const [text, setText] = useState('');
+  const [speechRate, setSpeechRate] = useState('');
+  const [temperatures, setTemperatures] = useState<Record<string, string>>({});
   const [batchId, setBatchId] = useState(() => localStorage.getItem('voice.batch') || '');
   const [jobs, setJobs] = useState<Job[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [metrics, setMetrics] = useState<Record<string, Evaluation>>({});
   const [notice, setNotice] = useState('');
+  useEffect(() => {
+    const listener = (event: Event) => setNotice((event as CustomEvent<string>).detail);
+    window.addEventListener('studio-download-error', listener);
+    return () => window.removeEventListener('studio-download-error', listener);
+  }, []);
+
   const [loginRequired, setLoginRequired] = useState(false);
   const [token, setToken] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [authMode, setAuthMode] = useState('token');
+  const [authenticated, setAuthenticated] = useState(false);
+  useEffect(() => { req('/api/session').then(s => { setAuthMode(s.auth_mode || 'token'); setAuthenticated(!!s.authenticated && s.principal !== 'development'); }).catch(() => {}); }, []);
   const [sessionVersion, setSessionVersion] = useState(0);
   const [rating, setRating] = useState(5);
   const [ratingJob, setRatingJob] = useState('');
@@ -334,6 +378,10 @@ function App() {
           req('/api/models'),
         ]);
         if (cancelled) return;
+        if (!profile || !('reference' in profile) || !Array.isArray(available) ||
+            !available.every(model => model && typeof model.id === 'string' && typeof model.name === 'string' && typeof model.configured === 'boolean')) {
+          throw new Error('Backend API response is incompatible with this frontend');
+        }
         setReference(profile.reference);
         setModels(available);
       } catch (error) {
@@ -357,6 +405,9 @@ function App() {
       try {
         const result = await req('/api/generations/' + batchId);
         if (cancelled) return;
+        if (!result || !Array.isArray(result.jobs) || typeof result.text !== 'string') {
+          throw new Error('Backend returned an invalid generation status');
+        }
         setJobs(result.jobs);
         setText(result.text);
         if (result.jobs.some((j: Job) => ['pending', 'running'].includes(j.status))) {
@@ -420,6 +471,9 @@ function App() {
         text,
         models: eligible,
         language,
+        reference_id: reference.id,
+        speech_rate: speechRate ? Number(speechRate) : null,
+        model_settings: Object.fromEntries(eligible.filter(model => model !== "cosyvoice3" && temperatures[model]).map(model => [model, { temperature: Number(temperatures[model]) }])),
       });
       setJobs(result.jobs);
       setMetrics({});
@@ -567,6 +621,7 @@ function App() {
               className="btn-card-download"
               href={API + job.audio_url}
               download={`${model.name.replace(/\s+/g, '_')}.wav`}
+              onClick={event => downloadPrivate(event, job.audio_url!, `${model.name.replace(/\s+/g, '_')}.wav`)}
               title={`Download ${model.name} WAV recording`}
             >
               Download WAV
@@ -711,7 +766,7 @@ function App() {
                   ? 'Voice Comparison'
                   : t === 'Metrics'
                   ? 'Benchmark Metrics'
-                  : 'Blind Evaluation'}
+                  : 'Listening Evaluation'}
               </button>
             ))}
           </div>
@@ -732,6 +787,13 @@ function App() {
                 English
               </button>
             </div>
+            {authenticated && <button onClick={async () => {
+              try {
+                await req('/api/session', { method: 'DELETE' });
+                sessionToken = ''; setAuthenticated(false); setLoginRequired(true);
+                setReference(null); setJobs([]); setBatchId(''); setMetrics({});
+              } catch (error) { setNotice(String(error)); }
+            }}>Sign out</button>}
             <span className="app-status">
               <span className="status-dot" aria-hidden="true"></span>
               {models.filter((m) => m.configured).length} / 3 engines active
@@ -753,7 +815,11 @@ function App() {
               onSubmit={async (e) => {
                 e.preventDefault();
                 try {
-                  await post('/api/session', { token });
+                  const session = await post('/api/session', { ...(authMode === 'accounts' ? { username, password } : { token }), transport: crossSiteApi ? 'bearer' : 'cookie' });
+                  sessionToken = session.session_token || '';
+                  setAuthenticated(true);
+                  setReference(null); setJobs([]); setBatchId(''); setMetrics({});
+                  setPassword('');
                   setToken('');
                   setLoginRequired(false);
                   setNotice('');
@@ -764,7 +830,10 @@ function App() {
               }}
             >
               <h2>Studio Authorization Required</h2>
-              <label>
+              {authMode === 'accounts' ? <>
+                <label>Username<input autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} maxLength={100} required /></label>
+                <label>Password<input type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} maxLength={1000} required /></label>
+              </> : <label>
                 Access Token
                 <input
                   type="password"
@@ -772,7 +841,7 @@ function App() {
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
                 />
-              </label>
+              </label>}
               <button className="primary" type="submit">
                 Connect Session
               </button>
@@ -794,6 +863,7 @@ function App() {
                       className="outline btn-export"
                       href={API + '/api/exports/' + batchId}
                       download={`voice_comparison_${batchId}.zip`}
+                      onClick={event => downloadPrivate(event, "/api/exports/" + batchId, `voice_comparison_${batchId}.zip`)}
                       title="Download complete audio bundle and CSV metrics in a ZIP archive"
                     >
                       Export All
@@ -809,6 +879,23 @@ function App() {
                 </div>
               </div>
 
+              <div className="generation-controls">
+                <label>Speech rate
+                  <select value={speechRate} onChange={e => setSpeechRate(e.target.value)}>
+                    <option value="">Model default</option>
+                    <option value="0.8">0.8 ×</option><option value="0.9">0.9 ×</option>
+                    <option value="1">1.0 ×</option><option value="1.1">1.1 ×</option>
+                  </select>
+                </label>
+                {eligible.filter(model => model !== 'cosyvoice3').map(model => <label key={model}>
+                  {model === 'qwen3' ? 'Qwen3' : 'XTTS-v2'} temperature
+                  <input type="number" min="0.1" max="1.5" step="0.05" placeholder="Model default"
+                    value={temperatures[model] || ''}
+                    onChange={e => setTemperatures(current => ({ ...current, [model]: e.target.value }))} />
+                </label>)}
+                {eligible.includes('cosyvoice3') && <small>CosyVoice uses its native sampling settings; temperature adjustment is unavailable.</small>}
+                <button onClick={() => { setSpeechRate(''); setTemperatures({}); }}>Reset controls</button>
+              </div>
               <div className="script-container">
                 <div className="script-header">
                   <label className="input-label" htmlFor="speech">
@@ -820,7 +907,7 @@ function App() {
                   id="speech"
                   value={text}
                   onChange={(e) => setText(e.target.value)}
-                  maxLength={2500}
+                  maxLength={2000}
                   placeholder={
                     language === 'English'
                       ? 'Enter English speech text to clone and benchmark across all TTS models simultaneously…'
@@ -869,7 +956,7 @@ function App() {
                 {active.map(card)}
                 {!active.length && (
                   <div className="empty-workspace">
-                    Open Models & presets to add engines to the comparison.
+                    Open Models &amp; presets to add engines to the comparison.
                   </div>
                 )}
               </div>
@@ -880,11 +967,11 @@ function App() {
             <>
               <div className="heading">
                 <div>
-                  <h1>Advanced Evaluation & Benchmark Matrix</h1>
+                  <h1>Advanced Evaluation &amp; Benchmark Matrix</h1>
                   <p>
                     Standardized speech metrics including Character Error Rate (CER), Word Error Rate
                     (WER), Real-Time Factor (RTF), Speaker Similarity (ECAPA),
-                    ScoreQ MOS, and DNSMOS.
+                    ScoreQ predicted quality, and DNSMOS.
                   </p>
                 </div>
               </div>
@@ -903,7 +990,7 @@ function App() {
                   {completedJobs.length > 0 && (
                     <div className="competition-banner">
                       <div className="comp-item">
-                        <span className="comp-badge">MOS QUALITY</span>
+                        <span className="comp-badge">PREDICTED QUALITY</span>
                         <strong>
                           {(() => {
                             const scores = completedJobs.map((j) => ({
@@ -1143,10 +1230,9 @@ function App() {
             <div className="evaluation-view">
               <div className="heading">
                 <div>
-                  <h1>Blind Subjective MOS Evaluation</h1>
+                  <h1>Subjective Listening Ratings</h1>
                   <p>
-                    Conduct unbiased blind A/B/X listening tests without model brand bias.
-                    Voices are randomized and anonymized to eliminate model preconceptions.
+                    Compare recordings and rate voice quality for internal review. Model names can be hidden; this view is not a standardized blind A/B/X study.
                   </p>
                 </div>
               </div>
@@ -1155,10 +1241,9 @@ function App() {
               <div className="panel blind-panel">
                 <div className="panel-header-row">
                   <div>
-                    <h2>Blind Subjective MOS Evaluation</h2>
+                    <h2>Subjective Listening Ratings</h2>
                     <p>
-                      Assess voice naturalness and articulation on a 1–5 scale. Voices are randomized
-                      and anonymized to eliminate model preconceptions.
+                      Assess voice naturalness and articulation on a 1–5 scale. Names can be hidden, while the clip order follows the current comparison.
                     </p>
                   </div>
                   {completedJobs.length > 0 && (
@@ -1174,7 +1259,7 @@ function App() {
                 {!completedJobs.length ? (
                   <div className="empty-state" style={{ padding: '32px 16px' }}>
                     <h3>No Completed Voice Generations Available</h3>
-                    <p>Generate speech in the Voice Comparison tab first to run a blind listening test.</p>
+                    <p>Generate speech in the Voice Comparison tab first to submit listening ratings.</p>
                     <button className="primary" onClick={() => setTab('Compare')}>
                       Go to Compare Voices
                     </button>

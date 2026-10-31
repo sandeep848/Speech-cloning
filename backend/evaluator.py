@@ -120,10 +120,13 @@ class Evaluator:
                 dnsmos_dir.mkdir(parents=True, exist_ok=True)
                 dnsmos_file = dnsmos_dir / "sig_bak_ovr.onnx"
                 if not dnsmos_file.is_file():
+                    if os.getenv("APP_ENV") == "production":
+                        raise RuntimeError("Provision reviewed DNSMOS weights before production startup")
                     from huggingface_hub import hf_hub_download
 
                     dl = hf_hub_download(
                         repo_id="anchor-flux/dnsmos-onnx",
+                        revision=os.getenv("DNSMOS_REVISION", "main"),
                         filename="sig_bak_ovr.onnx",
                         local_dir=str(dnsmos_dir),
                     )

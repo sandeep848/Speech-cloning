@@ -86,6 +86,8 @@ def _ensure_repo_and_weights() -> Path:
             if not REPO_DIR.exists():
                 REPO_DIR.symlink_to(external_repo, target_is_directory=True)
         else:
+            if os.getenv("APP_ENV") == "production":
+                raise RuntimeError("Provision reviewed CosyVoice source before production startup")
             subprocess.run(
                 [
                     "git",
@@ -125,10 +127,12 @@ def _ensure_repo_and_weights() -> Path:
                 return external_weights.resolve()
         return external_weights.resolve()
 
+    if os.getenv("APP_ENV") == "production":
+        raise RuntimeError("Provision reviewed CosyVoice weights before production startup")
     from huggingface_hub import snapshot_download
 
     target_dir.mkdir(parents=True, exist_ok=True)
-    snapshot_download(repo_id=HF_REPO_ID, local_dir=str(target_dir))
+    snapshot_download(repo_id=HF_REPO_ID, revision=os.getenv("COSY_REVISION", "main"), local_dir=str(target_dir))
     return target_dir
 
 

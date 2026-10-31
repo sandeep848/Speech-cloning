@@ -1,0 +1,11 @@
+# Reproducibility
+
+The pinned `backend/requirements-test.lock` records the API/test dependency graph exercised on Python 3.12.14 Linux. It does not lock PyTorch, CUDA, checkpoint libraries, CosyVoice source, models or evaluator artifacts. Full real-model environment locking is blocked pending compatibility tests on the intended Windows/Linux CPU/GPU host. Frontend installation uses package-lock.json; Vite was updated to 6.4.5 after npm audit identified the 6.4.4 advisory.
+
+A job provenance row records model ID, configured revision (or explicitly unverified), reference/transcript hashes, language, requested temperature/rate/seed, selected environment controls, configured device and software revision. Batch rows retain generation text; jobs retain measured runtime. ZIP metadata includes provenance. Null requested controls mean the model/environment defaults were used. This first version does not yet capture every resolved sampling default, checkpoint hash or detected accelerator. Do not treat the provenance schema as a complete scientific manifest.
+
+Request controls never mutate os.environ. Seeded requests require REPRODUCIBLE=1; all synthesis then serializes under a global lock, sets Python/NumPy/Torch seeds and requests deterministic PyTorch algorithms. Unsupported kernels may fail. Ordinary jobs retain cross-model parallelism. This design does not promise bitwise repeatability across operating systems, package versions or hardware, and real seeded model execution is unverified here.
+
+Before an experiment, save `python -m pip freeze`, Python/Node/OS versions, `nvidia-smi` output when available, source commit SHAs, model/evaluator file SHA-256 manifests and the exact reference/transcript hashes. QWEN_REVISION and COSY_REVISION can pin development downloads; downloaded local directories and cached snapshots still require independent artifact verification. Do not use broad TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD overrides; the launcher no longer sets one. XTTS compatibility with safe checkpoint loading remains a required real-environment check.
+
+Run `python backend/doctor.py` for non-destructive diagnostics, `python start.py --check` for configuration/import validation, and the benchmark only with the actual inference environment. No measurements are synthesized to fill missing results.

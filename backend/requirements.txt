@@ -23,3 +23,4 @@ openai-whisper
 jiwer
 speechbrain
 scoreq
+argon2-cffi==25.1.0
