@@ -4,6 +4,16 @@ const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const { mkdir } = require('node:fs/promises');
 const { chromium } = require('playwright');
+const net = require('node:net');
+async function serverAcceptsConnections() {
+  return new Promise(resolve => {
+    const socket = net.createConnection({host:'127.0.0.1',port});
+    socket.setTimeout(200);
+    socket.once('connect', () => { socket.destroy(); resolve(true); });
+    socket.once('error', () => { socket.destroy(); resolve(false); });
+    socket.once('timeout', () => { socket.destroy(); resolve(false); });
+  });
+}
 const port = 4175;
 const origin = `http://127.0.0.1:${port}`;
 const server = spawn(process.execPath,
@@ -32,7 +42,7 @@ async function fits(page, name) {
   try {
     for(let i=0;i<150;i++) {
       if(server.exitCode !== null) throw Error('Preview server exited before becoming ready');
-      try { if((await fetch(origin)).ok) break; } catch {}
+      if(await serverAcceptsConnections()) break;
       if(i===149) throw Error('Preview server did not start');
       await new Promise(resolve=>setTimeout(resolve,100));
     }
@@ -101,7 +111,7 @@ async function fits(page, name) {
       await page.getByRole('button',{name:/Qwen3-TTS.*Health Scorecard/}).click();
       await page.getByRole('heading',{name:/Detailed Health Report/}).waitFor();
       await fits(page,`${width}: model report`);
-      await page.getByRole('button',{name:'Blind Evaluation',exact:true}).click();
+      await page.getByRole('button',{name:'Listening Evaluation',exact:true}).click();
       await page.getByLabel('Recording Engine').selectOption('job-0');
       await page.getByLabel('MOS Score').selectOption('4');
       await page.getByRole('button',{name:'Submit Score',exact:true}).click();
