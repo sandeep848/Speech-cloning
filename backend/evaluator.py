@@ -3,11 +3,45 @@
 from __future__ import annotations
 import math
 import os
+import re
 import shutil
 import wave
 from pathlib import Path
 
 EVAL_MODELS_DIR = Path(os.getenv("EVAL_MODELS_DIR", str(Path(__file__).resolve().parent / "models" / "evaluators"))).resolve()
+
+
+def signal_diagnostics(output: str, text: str):
+    """Descriptive measurements, not perceptual quality scores.
+
+    Quiet frames: non-overlapping 20 ms windows below -40 dBFS RMS,
+    pooling channel power (no phase cancellation), weighted by sample count.
+    Near clipping: channel samples with absolute amplitude >= 0.999.
+    Script rate includes pauses and does not verify the spoken transcript.
+    """
+    import numpy as np
+    import soundfile as sf
+
+    quiet_samples = total_frames = near_clip = total_samples = 0
+    with sf.SoundFile(output) as audio:
+        sample_rate = audio.samplerate
+        window = max(1, round(sample_rate * 0.020))
+        for block in audio.blocks(blocksize=window, dtype='float64', always_2d=True):
+            if not np.isfinite(block).all():
+                raise ValueError('Non-finite audio samples')
+            total_frames += len(block)
+            total_samples += block.size
+            near_clip += int(np.count_nonzero(np.abs(block) >= 0.999))
+            if float(np.mean(block * block)) < 0.0001:
+                quiet_samples += len(block)
+    if not total_frames:
+        return []
+    words = len(re.findall(r"\b\w+(?:['’–-]\w+)*\b", text, flags=re.UNICODE))
+    return [
+        ('script_wpm', words * 60 * sample_rate / total_frames, 'script-words/audio-duration-v1'),
+        ('quiet_frame_pct', quiet_samples * 100 / total_frames, 'rms-20ms-below-minus40dbfs-v1'),
+        ('near_clip_pct', near_clip * 100 / total_samples, 'abs-sample-ge-0.999-v1'),
+    ]
 
 
 class Evaluator:
@@ -156,6 +190,10 @@ class Evaluator:
             duration = w.getnframes() / w.getframerate()
         measures.append(("duration_s", duration, "wav"))
         measures.append(("latency_s", elapsed, "clock"))
+        try:
+            measures.extend(signal_diagnostics(output, text))
+        except Exception as e:
+            self.errors['signal_diagnostics'] = str(e)
         if duration:
             measures.append(("rtf", elapsed / duration, "clock"))
             if elapsed > 0:

@@ -196,3 +196,26 @@ def test_cosy_internal_pieces_are_contiguous(monkeypatch, tmp_path):
     assert ' '.join(c['tts_text'] for c in calls) == text
     assert calls[1]['tts_text'] == 'and the price is 1.85 euros.'
     assert all(c['speed'] == .96 for c in calls)
+
+
+def test_signal_diagnostics_known_levels_and_stereo(tmp_path):
+    from evaluator import signal_diagnostics
+    # Equal duration silence and near-full-scale stereo, with opposite phases.
+    # Channel power must not cancel, and final short windows are sample-weighted.
+    path = tmp_path / 'diagnostics.wav'
+    audio = np.concatenate([np.zeros((320, 2)), np.tile([1.0, -1.0], (320, 1))])
+    sf.write(path, audio, 16000, subtype='FLOAT')
+    metrics = {key: value for key, value, _ in signal_diagnostics(str(path), 'Hello world')}
+    assert metrics['quiet_frame_pct'] == 50
+    assert metrics['near_clip_pct'] == 50
+    assert metrics['script_wpm'] == 3000
+
+
+def test_signal_diagnostics_silence_short_and_empty(tmp_path):
+    from evaluator import signal_diagnostics
+    path = tmp_path / 'short.wav'
+    sf.write(path, np.zeros(13), 16000)
+    metrics = {key: value for key, value, _ in signal_diagnostics(str(path), '')}
+    assert metrics == {'script_wpm': 0, 'quiet_frame_pct': 100, 'near_clip_pct': 0}
+    sf.write(path, np.zeros(0), 16000)
+    assert signal_diagnostics(str(path), 'Hello') == []

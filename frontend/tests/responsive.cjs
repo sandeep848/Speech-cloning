@@ -64,13 +64,19 @@ async function fits(page, name) {
         else if(path.startsWith('/api/generations')) body={id:'demo',text:'Hello, world. A new paragraph.',jobs};
         else if(path.startsWith('/api/evaluations')) body={status:'completed',errors:[],metrics:[
           {name:'wer',value:.05},{name:'cer',value:.03},{name:'ecapa_similarity',value:.88},
-          {name:'scoreq',value:4},{name:'rtfx',value:1.5},{name:'rtf',value:.67}]};
+          {name:'scoreq',value:4},{name:'rtfx',value:1.5},{name:'rtf',value:.67},
+          {name:'script_wpm',value:135},{name:'quiet_frame_pct',value:12},{name:'near_clip_pct',value:0}]};
         else if(path==='/api/agreement') body={kappa:null};
         return route.fulfill({json:body});
       });
       await page.goto(origin);
       await page.getByText('German Reference Active',{exact:true}).waitFor();
       await fits(page,`${width}: initial`);
+      assert(!(await page.getByRole('combobox', {name:/^Speech rate/}).isVisible()));
+      await page.locator('.generation-settings > summary').click();
+      await page.getByRole('combobox', {name:/^Speech rate/}).selectOption('0.9');
+      await fits(page,`${width}: expanded settings`);
+      await page.locator('.generation-settings > summary').click();
       if(width<=1100) {
         assert(!(await page.locator('#sidebar-content').isVisible()),'Mobile library should start collapsed');
         await page.getByRole('button',{name:'Models & presets',exact:true}).click();
@@ -94,14 +100,21 @@ async function fits(page, name) {
       await page.locator('.voice-card:not(.reference) audio').first().waitFor();
       await fits(page,`${width}: populated comparison`);
       assert.equal((await page.getByRole('link',{name:'Export All',exact:true}).textContent()).trim(), 'Export All');
-      if(width===390 && process.env.RESP_SCREENSHOTS) {
+      if((width===390 || width===1440) && process.env.RESP_SCREENSHOTS) {
         await mkdir(process.env.RESP_SCREENSHOTS,{recursive:true});
-        await page.screenshot({path:`${process.env.RESP_SCREENSHOTS}/mobile-compare.png`,fullPage:true});
+        await page.screenshot({path:`${process.env.RESP_SCREENSHOTS}/${width}-compare.png`,fullPage:true});
       }
       await page.getByRole('button',{name:'Benchmark Metrics',exact:true}).click();
       await page.getByRole('heading',{name:'Model Competition Matrix',exact:true}).waitFor();
       await fits(page,`${width}: metrics`);
-      if(width===390 && process.env.RESP_SCREENSHOTS) await page.screenshot({path:`${process.env.RESP_SCREENSHOTS}/mobile-metrics.png`,fullPage:true});
+      assert.equal(await page.locator('.benchmark-table tbody tr').count(), 4);
+      await page.getByLabel('Metric focus').selectOption('Signal diagnostics');
+      await page.getByText('135.0 words/min', {exact:true}).first().waitFor();
+      assert.equal(await page.locator('.benchmark-table tbody tr').count(), 3);
+      assert.equal(await page.locator('.leader-badge').count(), 0);
+      await fits(page,`${width}: diagnostics`);
+      await page.getByLabel('Metric focus').selectOption('Overview');
+      if((width===390 || width===1440) && process.env.RESP_SCREENSHOTS) await page.screenshot({path:`${process.env.RESP_SCREENSHOTS}/${width}-metrics.png`,fullPage:true});
       const table=page.getByRole('region',{name:/Model comparison metrics/});
       if(width<=760) {
         assert(await table.evaluate(e=>e.scrollWidth>e.clientWidth),'Wide metrics should scroll inside their container');
@@ -118,7 +131,7 @@ async function fits(page, name) {
       await page.getByRole('button',{name:'Submit Score',exact:true}).click();
       await page.getByText('Rating successfully saved.',{exact:true}).waitFor();
       await fits(page,`${width}: evaluation`);
-      if(width===390 && process.env.RESP_SCREENSHOTS) await page.screenshot({path:`${process.env.RESP_SCREENSHOTS}/mobile-evaluation.png`,fullPage:true});
+      if((width===390 || width===1440) && process.env.RESP_SCREENSHOTS) await page.screenshot({path:`${process.env.RESP_SCREENSHOTS}/${width}-evaluation.png`,fullPage:true});
       assert.deepEqual(errors,[],`Unexpected page errors at ${width}`);
       console.log(`PASS ${width}px: navigation, library, ordering, audio UI, metrics scroll, rating`);
       await context.close();

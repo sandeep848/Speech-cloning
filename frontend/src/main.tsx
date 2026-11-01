@@ -44,13 +44,22 @@ interface MetricDef {
   key: string;
   label: string;
   benchmark: string;
-  category: 'Accuracy' | 'Speed & Latency' | 'Acoustic Quality';
+  category: 'Accuracy' | 'Speed & Latency' | 'Acoustic Quality' | 'Signal diagnostics';
   higherIsBetter?: boolean;
   format: (v: number) => string;
-  getHealth: (v: number) => { status: 'excellent' | 'good' | 'warning'; text: string };
+  getHealth?: (v: number) => { status: 'excellent' | 'good' | 'warning'; text: string };
 }
 
 const METRIC_DEFS: MetricDef[] = [
+  { key: 'script_wpm', label: 'Script pace', category: 'Signal diagnostics',
+    benchmark: 'Script words ÷ total audio minutes, including pauses. Not ASR-verified.',
+    format: v => v.toFixed(1) + ' words/min' },
+  { key: 'quiet_frame_pct', label: 'Quiet frames', category: 'Signal diagnostics',
+    benchmark: '20 ms frames below −40 dBFS RMS; includes quiet speech and pauses.',
+    format: v => v.toFixed(1) + '%' },
+  { key: 'near_clip_pct', label: 'Near-clipping samples', category: 'Signal diagnostics',
+    benchmark: 'Samples at ≥ 99.9% full scale. A warning indicator, not proof of distortion.',
+    format: v => v.toFixed(3) + '%' },
   {
     key: 'cer',
     label: 'Character Error Rate (CER)',
@@ -358,6 +367,9 @@ function App() {
   const [raterName, setRaterName] = useState('');
   const [ratingJob, setRatingJob] = useState('');
   const [agreement, setAgreement] = useState('');
+  const [metricGroup, setMetricGroup] = useState('Overview');
+  const visibleMetrics = METRIC_DEFS.filter(def => metricGroup === 'All metrics' ||
+    (metricGroup === 'Overview' ? ['wer', 'ecapa_similarity', 'scoreq', 'rtfx'].includes(def.key) : def.category === metricGroup));
   const [selectedMetricModel, setSelectedMetricModel] = useState<string>('all');
   const dragged = useRef('');
   const [clock, setClock] = useState(Date.now());
@@ -681,7 +693,7 @@ function App() {
 
   const completedJobs = jobs.filter((j) => j.status === 'complete');
   const getLeader = (def: MetricDef) => {
-    if (completedJobs.length < 2) return null;
+    if (completedJobs.length < 2 || def.higherIsBetter === undefined) return null;
     let bestJob: Job | null = null;
     let bestVal: number | null = null;
     for (const j of completedJobs) {
@@ -823,7 +835,7 @@ function App() {
         </nav>
 
         <main>
-          {authenticated && <details className="panel">
+          {authenticated && <details className="panel data-settings">
             <summary>Manage saved data</summary>
             <p>Delete completed generations before removing references used by them.</p>
             <button disabled={!batchId || busy} onClick={async () => {
@@ -903,9 +915,9 @@ function App() {
             <>
               <div className="heading">
                 <div>
-                  <h1>Unified Voice Comparison</h1>
+                  <h1>Voice comparison</h1>
                   <p>
-                    Compare all active models with natural speech durations and pacing.
+                    One script. Multiple voices. Listen, compare, and choose.
                   </p>
                 </div>
                 <div className="heading-actions">
@@ -930,7 +942,7 @@ function App() {
                 </div>
               </div>
 
-              <div className="generation-controls">
+              <details className="generation-settings"><summary>Generation settings <span>Speech rate &amp; temperature</span></summary><div className="generation-controls">
                 <label>Speech rate
                   <select value={speechRate} onChange={e => setSpeechRate(e.target.value)}>
                     <option value="">Model default</option>
@@ -947,6 +959,7 @@ function App() {
                 {eligible.includes('cosyvoice3') && <small>CosyVoice uses its native sampling settings; temperature adjustment is unavailable.</small>}
                 <button onClick={() => { setSpeechRate(''); setTemperatures({}); }}>Reset controls</button>
               </div>
+              </details>
               <div className="script-container">
                 <div className="script-header">
                   <label className="input-label" htmlFor="speech">
@@ -1018,11 +1031,9 @@ function App() {
             <>
               <div className="heading">
                 <div>
-                  <h1>Advanced Evaluation &amp; Benchmark Matrix</h1>
+                  <h1>Compare the details</h1>
                   <p>
-                    Standardized speech metrics including Character Error Rate (CER), Word Error Rate
-                    (WER), Real-Time Factor (RTF), Speaker Similarity (ECAPA),
-                    ScoreQ predicted quality, and DNSMOS.
+                    Start with the essentials. Explore accuracy, speed, quality, or signal diagnostics when you need more detail.
                   </p>
                 </div>
               </div>
@@ -1037,71 +1048,13 @@ function App() {
                 </div>
               ) : (
                 <div className="metrics-wrapper">
-                  {/* Model Competition Leaderboard */}
-                  {completedJobs.length > 0 && (
-                    <div className="competition-banner">
-                      <div className="comp-item">
-                        <span className="comp-badge">PREDICTED QUALITY</span>
-                        <strong>
-                          {(() => {
-                            const scores = completedJobs.map((j) => ({
-                              name: models.find((m) => m.id === j.model_id)?.name,
-                              val: getModelMetric(j.id, 'scoreq') || 0,
-                            }));
-                            scores.sort((a, b) => b.val - a.val);
-                            return scores[0]?.val > 0 ? `${scores[0].name} (${scores[0].val.toFixed(2)})` : 'Pending';
-                          })()}
-                        </strong>
-                      </div>
-                      <div className="comp-item">
-                        <span className="comp-badge">SPEAKER SIMILARITY</span>
-                        <strong>
-                          {(() => {
-                            const scores = completedJobs.map((j) => ({
-                              name: models.find((m) => m.id === j.model_id)?.name,
-                              val: getModelMetric(j.id, 'ecapa_similarity') || 0,
-                            }));
-                            scores.sort((a, b) => b.val - a.val);
-                            return scores[0]?.val > 0 ? `${scores[0].name} (${scores[0].val.toFixed(3)})` : 'Pending';
-                          })()}
-                        </strong>
-                      </div>
-                      <div className="comp-item">
-                        <span className="comp-badge">HIGHEST SPEED</span>
-                        <strong>
-                          {(() => {
-                            const scores = completedJobs.map((j) => ({
-                              name: models.find((m) => m.id === j.model_id)?.name,
-                              val: getModelMetric(j.id, 'rtfx') || 0,
-                            }));
-                            scores.sort((a, b) => b.val - a.val);
-                            return scores[0]?.val > 0 ? `${scores[0].name} (${scores[0].val.toFixed(1)}x RT)` : 'Pending';
-                          })()}
-                        </strong>
-                      </div>
-                      <div className="comp-item">
-                        <span className="comp-badge">ACCURACY (WER)</span>
-                        <strong>
-                          {(() => {
-                            const scores = completedJobs.map((j) => ({
-                              name: models.find((m) => m.id === j.model_id)?.name,
-                              val: getModelMetric(j.id, 'wer') ?? 999,
-                            }));
-                            scores.sort((a, b) => a.val - b.val);
-                            return scores[0]?.val < 100 ? `${scores[0].name} (${(scores[0].val * 100).toFixed(1)}%)` : 'Pending';
-                          })()}
-                        </strong>
-                      </div>
-                    </div>
-                  )}
-
                   {/* View Selector Tabs */}
                   <div className="metrics-view-tabs">
                     <button
                       className={selectedMetricModel === 'all' ? 'active' : ''}
                       onClick={() => setSelectedMetricModel('all')}
                     >
-                      Multi-Model Benchmark Matrix
+                      All models
                     </button>
                     {jobs.map((job) => {
                       const m = models.find((mod) => mod.id === job.model_id);
@@ -1117,13 +1070,22 @@ function App() {
                     })}
                   </div>
 
+                  <div className="metric-toolbar">
+                    <label>Metric focus
+                      <select value={metricGroup} onChange={e => setMetricGroup(e.target.value)}>
+                        {['Overview', 'Accuracy', 'Speed & Latency', 'Acoustic Quality', 'Signal diagnostics', 'All metrics'].map(group =>
+                          <option key={group}>{group}</option>)}
+                      </select>
+                    </label>
+                    <p>{visibleMetrics.length} metrics · Same script and settings give the fairest comparison.</p>
+                  </div>
                   {/* View 1: Multi-Model Tabular Format */}
                   {selectedMetricModel === 'all' ? (
                     <div className="panel table-panel">
                       <div className="table-top">
                         <h2>Model Competition Matrix</h2>
                         <span className="table-caption">
-                          Higher values better for ScoreQ, Similarity, RTFx. Lower better for CER, WER, RTF.
+                          Automated scores support listening; they do not replace it.
                         </span>
                       </div>
                       <p className="table-scroll-hint">Swipe the table to see every model and metric.</p>
@@ -1133,15 +1095,15 @@ function App() {
                           <thead>
                             <tr>
                               <th>Metric Field</th>
-                              <th>Target / Health Benchmark</th>
                               {jobs.map((j) => (
                                 <th key={j.id}>{models.find((m) => m.id === j.model_id)?.name}</th>
                               ))}
                               <th>Leader</th>
+                              <th>Interpretation</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {METRIC_DEFS.map((def) => {
+                            {visibleMetrics.map((def) => {
                               const leaderName = getLeader(def);
                               return (
                                 <tr key={def.key}>
@@ -1149,7 +1111,6 @@ function App() {
                                     <strong>{def.label}</strong>
                                     <span className="metric-cat">{def.category}</span>
                                   </td>
-                                  <td className="metric-benchmark-cell">{def.benchmark}</td>
                                   {jobs.map((j) => {
                                     const val = getModelMetric(j.id, def.key);
                                     if (val === null) {
@@ -1176,6 +1137,7 @@ function App() {
                                       '—'
                                     )}
                                   </td>
+                                  <td className="metric-benchmark-cell">{def.benchmark}</td>
                                 </tr>
                               );
                             })}
@@ -1220,14 +1182,14 @@ function App() {
                                 <tr>
                                   <th>Metric Field</th>
                                   <th>Your Value</th>
-                                  <th>Target / Health Benchmark</th>
-                                  <th>Health Assessment</th>
+                                  <th>Interpretation</th>
+                                  <th>Heuristic assessment</th>
                                 </tr>
                               </thead>
                               <tbody>
-                                {METRIC_DEFS.map((def) => {
+                                {visibleMetrics.map((def) => {
                                   const val = getModelMetric(selJob?.id, def.key);
-                                  const health = val !== null ? def.getHealth(val) : null;
+                                  const health = val !== null ? def.getHealth?.(val) : null;
                                   return (
                                     <tr key={def.key}>
                                       <td className="metric-title-cell">
