@@ -5,12 +5,12 @@ from collections import deque
 import os
 import re
 from pathlib import Path
+from models.cache import BoundedCache
 
 MODEL_DIR = Path(__file__).resolve().parent / "weights"
 REPO_ID = os.getenv("QWEN_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-Base")
 
 _engine = None
-from models.cache import BoundedCache
 _prompt_cache = BoundedCache()
 
 
@@ -19,7 +19,8 @@ def _resolve_weights_dir() -> str:
     target = Path(env_dir).resolve() if env_dir else MODEL_DIR
 
     from models.weights import resolve_snapshot
-    return resolve_snapshot(REPO_ID, os.getenv('QWEN_REVISION'), target, 'Qwen')
+
+    return resolve_snapshot(REPO_ID, os.getenv("QWEN_REVISION"), target, "Qwen")
 
 
 def load():
@@ -40,10 +41,14 @@ def load():
     )
     weights_path = _resolve_weights_dir()
     attn_impl = os.getenv("QWEN_ATTN_IMPLEMENTATION") or (
-        "sdpa" if hasattr(torch.nn.functional, "scaled_dot_product_attention") else "eager"
+        "sdpa"
+        if hasattr(torch.nn.functional, "scaled_dot_product_attention")
+        else "eager"
     )
     if attn_impl not in ("eager", "sdpa", "flash_attention_2"):
-        raise ValueError("QWEN_ATTN_IMPLEMENTATION must be eager, sdpa or flash_attention_2")
+        raise ValueError(
+            "QWEN_ATTN_IMPLEMENTATION must be eager, sdpa or flash_attention_2"
+        )
     _engine = Qwen3TTSModel.from_pretrained(
         weights_path,
         device_map=device,
@@ -70,6 +75,7 @@ def synthesize(
     )
 
     from generation_config import current
+
     config = current.get()
     engine = load()
     lang = generation_language()
@@ -98,17 +104,24 @@ def synthesize(
         # Batch subsequent phrases on CUDA; keep the first phrase separate so
         # a larger batch does not delay the first completed audio observation.
         device = str(getattr(getattr(engine, "model", None), "device", "cpu"))
-        batch_size = int(os.getenv("QWEN_BATCH_SIZE", "2" if device.startswith("cuda") else "1"))
+        batch_size = int(
+            os.getenv("QWEN_BATCH_SIZE", "2" if device.startswith("cuda") else "1")
+        )
         if not 1 <= batch_size <= 8:
             raise ValueError("QWEN_BATCH_SIZE must be between 1 and 8")
         gen_kwargs = {
-            "temperature": config.temperature if config.temperature is not None else float(os.getenv("QWEN_TEMPERATURE", "0.6")),
+            "temperature": config.temperature
+            if config.temperature is not None
+            else float(os.getenv("QWEN_TEMPERATURE", "0.6")),
             "top_p": float(os.getenv("QWEN_TOP_P", "0.85")),
             "top_k": int(os.getenv("QWEN_TOP_K", "30")),
             "subtalker_temperature": float(os.getenv("QWEN_SUBTALKER_TEMP", "0.6")),
             "subtalker_top_p": float(os.getenv("QWEN_SUBTALKER_TOP_P", "0.85")),
         }
-        groups = deque([chunks[:1]] + [chunks[i:i + batch_size] for i in range(1, len(chunks), batch_size)])
+        groups = deque(
+            [chunks[:1]]
+            + [chunks[i : i + batch_size] for i in range(1, len(chunks), batch_size)]
+        )
         output_rate = None
         while groups:
             group = groups.popleft()
@@ -125,7 +138,9 @@ def synthesize(
                 opts["voice_clone_prompt"] = [prompt_item] * len(group)
             else:
                 opts["ref_audio"] = [ref_str] * len(group) if batched else ref_str
-                opts["ref_text"] = [clean_transcript] * len(group) if batched else clean_transcript
+                opts["ref_text"] = (
+                    [clean_transcript] * len(group) if batched else clean_transcript
+                )
                 if not clean_transcript:
                     opts["x_vector_only_mode"] = True
             out_of_memory = False
@@ -139,19 +154,32 @@ def synthesize(
                 # Leave the exception scope before freeing cached allocations.
                 # Never retry unrelated decoder failures or a single-phrase OOM.
                 torch.cuda.empty_cache()
-                groups = deque([[item] for pending in [group, *groups] for item in pending])
-                print("[qwen3] GPU batch exceeded memory; retrying remaining phrases individually", flush=True)
+                groups = deque(
+                    [[item] for pending in [group, *groups] for item in pending]
+                )
+                print(
+                    "[qwen3] GPU batch exceeded memory; retrying remaining phrases individually",
+                    flush=True,
+                )
                 continue
             mark_first_audio()
             rate = int(rate)
             if len(wavs) != len(group):
-                raise RuntimeError("Qwen returned a different number of audio chunks than input phrases")
+                raise RuntimeError(
+                    "Qwen returned a different number of audio chunks than input phrases"
+                )
             if output_rate is not None and output_rate != rate:
                 raise RuntimeError("Qwen changed sample rate between phrase batches")
             output_rate = rate
-            wav_parts.extend(np.asarray(wav, dtype=np.float32).reshape(-1) for wav in wavs)
+            wav_parts.extend(
+                np.asarray(wav, dtype=np.float32).reshape(-1) for wav in wavs
+            )
 
-        samples = assemble_speech_waveform(wav_parts, rate=rate, texts=chunks,
+        samples = assemble_speech_waveform(
+            wav_parts,
+            rate=rate,
+            texts=chunks,
             pauses_ms=[item.pause_after_ms for item in plan],
-            speech_rate=get_speech_rate("qwen3"))
+            speech_rate=get_speech_rate("qwen3"),
+        )
         return samples, int(rate)

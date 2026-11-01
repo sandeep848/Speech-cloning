@@ -1,4 +1,5 @@
 """Punctuation-aware phrasing and gentle, pitch-preserving speech-rate control."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -33,8 +34,11 @@ def plan_speech(text: str, max_chars: int = 220) -> list[SpeechChunk]:
     paragraph = _pause("PARAGRAPH_PAUSE_MS", 600)
     continuation = _pause("CONTINUATION_PAUSE_MS", 90)
     text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
-    paragraphs = [re.sub(r"\s+", " ", p).strip()
-                  for p in re.split(r"\n[ \t]*\n+", text) if p.strip()]
+    paragraphs = [
+        re.sub(r"\s+", " ", p).strip()
+        for p in re.split(r"\n[ \t]*\n+", text)
+        if p.strip()
+    ]
     result: list[SpeechChunk] = []
     for paragraph_index, content in enumerate(paragraphs):
         protected = set()
@@ -50,10 +54,10 @@ def plan_speech(text: str, max_chars: int = 220) -> list[SpeechChunk]:
             for match in re.finditer(pattern, content):
                 protected.update(range(match.start(), match.end()))
         boundaries = []
-        for match in re.finditer(r'''[.!?]+["'”’»)]*(?=\s|$)|[,;:](?=\s|$)''', content):
+        for match in re.finditer(r"""[.!?]+["'”’»)]*(?=\s|$)|[,;:](?=\s|$)""", content):
             if match.start() in protected:
                 continue
-            pause = sentence if content[match.start()] in '.!?' else comma
+            pause = sentence if content[match.start()] in ".!?" else comma
             boundaries.append((match.end(), pause))
         if not boundaries or boundaries[-1][0] != len(content):
             boundaries.append((len(content), continuation))
@@ -76,23 +80,31 @@ def plan_speech(text: str, max_chars: int = 220) -> list[SpeechChunk]:
 
 def get_speech_rate(model_id: str) -> float:
     from generation_config import current
+
     if current.get().speech_rate is not None:
         return current.get().speech_rate
-    variable = {"qwen3": "QWEN_SPEECH_RATE", "cosyvoice3": "COSY_SPEECH_RATE",
-                "xtts-v2": "XTTS_SPEECH_RATE"}[model_id]
+    variable = {
+        "qwen3": "QWEN_SPEECH_RATE",
+        "cosyvoice3": "COSY_SPEECH_RATE",
+        "xtts-v2": "XTTS_SPEECH_RATE",
+    }[model_id]
     default = "0.92" if model_id == "qwen3" else "0.96"
     rate = float(os.getenv(variable, os.getenv("SPEECH_RATE", default)))
     if not math.isfinite(rate) or not 0.8 <= rate <= 1.1:
-        raise ValueError(f"{variable} must be between 0.8 and 1.1; 1.0 keeps native speed")
+        raise ValueError(
+            f"{variable} must be between 0.8 and 1.1; 1.0 keeps native speed"
+        )
     return rate
 
 
 def slow_speech(samples, rate: float):
     """Stretch speech, not the sample-rate header or inserted punctuation pauses."""
     import numpy as np
+
     if rate == 1.0:
         return samples
     import librosa
+
     # 1024/256 windows retain more consonant detail than long default windows.
     stretched = librosa.effects.time_stretch(
         samples, rate=rate, n_fft=1024, hop_length=256

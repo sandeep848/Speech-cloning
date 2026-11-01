@@ -30,7 +30,11 @@ jobs:
         env:
           BACKEND_URL: ${{ vars.VITE_API_URL }}
         run: |
-          case "$BACKEND_URL" in https://*) ;; *) echo 'Set VITE_API_URL to an HTTPS backend URL in repository Actions variables'; exit 1 ;; esac
+          if [ -n "$BACKEND_URL" ]; then
+            case "$BACKEND_URL" in https://*) ;; *) echo 'VITE_API_URL must be an HTTPS backend URL'; exit 1 ;; esac
+          else
+            echo 'Notice: VITE_API_URL not configured in Actions variables; building frontend with relative API path.'
+          fi
       - run: npm ci
         working-directory: frontend
       - run: npm run build

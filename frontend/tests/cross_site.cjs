@@ -1,10 +1,19 @@
 /* Browser regression: authenticated cross-site audio/downloads without cookies.
    This uses isolated API fixtures, never real credentials or inference. */
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const {spawn} = require('node:child_process');
 const {chromium} = require('playwright');
 const path = require('node:path');
 const net = require('node:net');
+
+function findChromium() {
+  if (process.env.CHROMIUM_EXECUTABLE) return process.env.CHROMIUM_EXECUTABLE;
+  for (const bin of ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser']) {
+    if (fs.existsSync(bin)) return bin;
+  }
+  return undefined;
+}
 const ready=()=>new Promise(resolve=>{const socket=net.createConnection({host:'127.0.0.1',port});socket.setTimeout(200);socket.once('connect',()=>{socket.destroy();resolve(true);});socket.once('error',()=>{socket.destroy();resolve(false);});socket.once('timeout',()=>{socket.destroy();resolve(false);});});
 const port=4176, origin=`http://127.0.0.1:${port}`, api='https://fixture-api.example.test';
 const server=spawn(process.execPath,[path.resolve(__dirname,'../node_modules/vite/bin/vite.js'),'--host','127.0.0.1','--port',String(port),'--strictPort'],{cwd:path.resolve(__dirname,'..'),env:{...process.env,VITE_API_URL:api},stdio:'ignore'});
@@ -17,7 +26,10 @@ const wav=Buffer.alloc(44+4800);wav.write('RIFF');wav.writeUInt32LE(wav.length-8
       if(i===99)throw Error('Fixture frontend did not start');
       await new Promise(resolve=>setTimeout(resolve,100));
     }
-    browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE||undefined,args:JSON.parse(process.env.CHROMIUM_ARGS||'[]')});
+    browser = await chromium.launch({
+      executablePath: findChromium(),
+      args: JSON.parse(process.env.CHROMIUM_ARGS || '["--no-sandbox", "--disable-setuid-sandbox"]'),
+    });
     const context=await browser.newContext();const page=await context.newPage();
     let valid=false, audioRequests=0, logouts=0;
     const secret='synthetic-session-for-browser-test';

@@ -8,35 +8,47 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env", override=False)
-from direct_inference import model_availability
+from direct_inference import model_availability  # noqa: E402
 
 
 def reference_diagnostics(path: Path) -> dict:
     """Measure reference defects without modifying audio or guessing its SNR."""
     import numpy as np
     import soundfile as sf
+
     try:
         audio, rate = sf.read(path, dtype="float32", always_2d=True)
         if not audio.size or not np.isfinite(audio).all():
             return {"error": "Empty or non-finite reference audio"}
         mono = audio.mean(axis=1)
-        rms = float(np.sqrt(np.mean(mono ** 2)))
+        rms = float(np.sqrt(np.mean(mono**2)))
         peak = float(np.max(np.abs(audio)))
-        clipping = float(np.mean(np.abs(audio) >= .999))
+        clipping = float(np.mean(np.abs(audio) >= 0.999))
         warnings = []
-        if clipping > .001:
-            warnings.append("Reference contains near-full-scale samples; inspect for clipping")
-        if rms < .005:
-            warnings.append("Reference is very quiet; use a clean, clearly audible recording")
+        if clipping > 0.001:
+            warnings.append(
+                "Reference contains near-full-scale samples; inspect for clipping"
+            )
+        if rms < 0.005:
+            warnings.append(
+                "Reference is very quiet; use a clean, clearly audible recording"
+            )
         if len(mono) / rate < 3:
-            warnings.append("Reference is short; a clean, longer single-speaker clip may improve identity")
-        if abs(float(mono.mean())) > .02:
+            warnings.append(
+                "Reference is short; a clean, longer single-speaker clip may improve identity"
+            )
+        if abs(float(mono.mean())) > 0.02:
             warnings.append("Reference has a substantial DC offset")
-        return {"duration_s": len(mono) / rate, "sample_rate": rate,
-                "channels": audio.shape[1], "peak": peak, "rms_dbfs":
-                20 * float(np.log10(max(rms, 1e-12))),
-                "near_full_scale_fraction": clipping, "warnings": warnings,
-                "transcript_check": "Manually verify the transcript matches every spoken word"}
+        return {
+            "duration_s": len(mono) / rate,
+            "sample_rate": rate,
+            "channels": audio.shape[1],
+            "peak": peak,
+            "rms_dbfs": 20 * float(np.log10(max(rms, 1e-12))),
+            "near_full_scale_fraction": clipping,
+            "warnings": warnings,
+            "transcript_check": "Manually verify the transcript matches every spoken word",
+        }
     except Exception as exc:
         return {"error": str(exc)}
 
@@ -52,9 +64,12 @@ def main():
                 "python": sys.executable,
                 "reference_audio": (reference / "reference.wav").is_file(),
                 "reference_text": (reference / "reference.txt").is_file(),
-                "reference_diagnostics": reference_diagnostics(reference / "reference.wav"),
+                "reference_diagnostics": reference_diagnostics(
+                    reference / "reference.wav"
+                ),
                 "ffmpeg": shutil.which("ffmpeg"),
-                "authentication_enabled": bool(os.getenv("API_TOKEN")) or os.getenv("AUTH_MODE") == "accounts",
+                "authentication_enabled": bool(os.getenv("API_TOKEN"))
+                or os.getenv("AUTH_MODE") == "accounts",
                 "auth_mode": os.getenv("AUTH_MODE", "token"),
                 "deployment_environment": os.getenv("APP_ENV", "development"),
                 "models": results,
@@ -62,12 +77,13 @@ def main():
             indent=2,
         )
     )
-    return (
-        0
-        if all(result["configured"] for result in results.values())
-        and (reference / "reference.wav").is_file()
-        else 1
+    dev_mode = os.getenv("APP_ENV", "development") == "development"
+    configured_ok = (
+        any(result["configured"] for result in results.values())
+        if dev_mode
+        else all(result["configured"] for result in results.values())
     )
+    return 0 if configured_ok and (reference / "reference.wav").is_file() else 1
 
 
 if __name__ == "__main__":

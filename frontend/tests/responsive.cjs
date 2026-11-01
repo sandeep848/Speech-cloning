@@ -37,6 +37,16 @@ async function fits(page, name) {
   const dimensions = await page.evaluate(() => ({width:innerWidth, scroll:document.documentElement.scrollWidth}));
   assert(dimensions.scroll <= dimensions.width + 1, `${name} spills horizontally: ${JSON.stringify(dimensions)}`);
 }
+const fs = require('node:fs');
+
+function findChromium() {
+  if (process.env.CHROMIUM_EXECUTABLE) return process.env.CHROMIUM_EXECUTABLE;
+  for (const bin of ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser']) {
+    if (fs.existsSync(bin)) return bin;
+  }
+  return undefined;
+}
+
 (async () => {
   let browser;
   try {
@@ -47,8 +57,8 @@ async function fits(page, name) {
       await new Promise(resolve=>setTimeout(resolve,100));
     }
     browser = await chromium.launch({
-      executablePath:process.env.CHROMIUM_EXECUTABLE || undefined,
-      args:JSON.parse(process.env.CHROMIUM_ARGS || '[]'),
+      executablePath: findChromium(),
+      args: JSON.parse(process.env.CHROMIUM_ARGS || '["--no-sandbox", "--disable-setuid-sandbox"]'),
     });
     for(const width of [320,360,390,430,600,768,820,1024,1280,1440]) {
       const context=await browser.newContext({viewport:{width,height:844}, hasTouch:width<=1100, isMobile:width<=760});

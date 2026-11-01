@@ -3,18 +3,20 @@
 from __future__ import annotations
 import os
 from pathlib import Path
+from models.cache import BoundedCache
 
 WEIGHTS_DIR = Path(__file__).resolve().parent / "weights"
 MODEL_NAME = os.getenv("XTTS_MODEL", "tts_models/multilingual/multi-dataset/xtts_v2")
 
 _engine = None
-from models.cache import BoundedCache
 _latent_cache = BoundedCache()
 
 
 def _configure_weights_dir() -> None:
     if os.getenv("COQUI_TOS_AGREED") != "1":
-        raise RuntimeError("Review the XTTS model license and explicitly set COQUI_TOS_AGREED=1 to accept it")
+        raise RuntimeError(
+            "Review the XTTS model license and explicitly set COQUI_TOS_AGREED=1 to accept it"
+        )
     tts_home = Path(os.getenv("TTS_HOME", str(WEIGHTS_DIR))).resolve()
     default_tts = (
         Path.home()
@@ -89,9 +91,16 @@ def synthesize(
     wav_chunks = []
     speed_val = float(os.getenv("XTTS_SPEED", "1.00")) * get_speech_rate("xtts-v2")
     if not 0.5 <= speed_val <= 1.5:
-        raise ValueError("Combined XTTS_SPEED and XTTS_SPEECH_RATE must be between 0.5 and 1.5")
+        raise ValueError(
+            "Combined XTTS_SPEED and XTTS_SPEECH_RATE must be between 0.5 and 1.5"
+        )
     from generation_config import current
-    temp_val = current.get().temperature if current.get().temperature is not None else float(os.getenv("XTTS_TEMPERATURE", "0.75"))
+
+    temp_val = (
+        current.get().temperature
+        if current.get().temperature is not None
+        else float(os.getenv("XTTS_TEMPERATURE", "0.75"))
+    )
     rep_val = float(os.getenv("XTTS_REPETITION_PENALTY", "10.0"))
 
     for sent in sents:
@@ -115,7 +124,11 @@ def synthesize(
 
     if not wav_chunks:
         raise RuntimeError("XTTS-v2 returned no audio")
-    samples = assemble_speech_waveform(wav_chunks, rate=rate, texts=sents,
-            pauses_ms=[item.pause_after_ms for item in plan],
-            speech_rate=1.0)
+    samples = assemble_speech_waveform(
+        wav_chunks,
+        rate=rate,
+        texts=sents,
+        pauses_ms=[item.pause_after_ms for item in plan],
+        speech_rate=1.0,
+    )
     return samples, rate

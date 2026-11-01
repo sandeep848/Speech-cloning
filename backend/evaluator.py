@@ -8,7 +8,12 @@ import shutil
 import wave
 from pathlib import Path
 
-EVAL_MODELS_DIR = Path(os.getenv("EVAL_MODELS_DIR", str(Path(__file__).resolve().parent / "models" / "evaluators"))).resolve()
+EVAL_MODELS_DIR = Path(
+    os.getenv(
+        "EVAL_MODELS_DIR",
+        str(Path(__file__).resolve().parent / "models" / "evaluators"),
+    )
+).resolve()
 
 
 def signal_diagnostics(output: str, text: str):
@@ -26,9 +31,9 @@ def signal_diagnostics(output: str, text: str):
     with sf.SoundFile(output) as audio:
         sample_rate = audio.samplerate
         window = max(1, round(sample_rate * 0.020))
-        for block in audio.blocks(blocksize=window, dtype='float64', always_2d=True):
+        for block in audio.blocks(blocksize=window, dtype="float64", always_2d=True):
             if not np.isfinite(block).all():
-                raise ValueError('Non-finite audio samples')
+                raise ValueError("Non-finite audio samples")
             total_frames += len(block)
             total_samples += block.size
             near_clip += int(np.count_nonzero(np.abs(block) >= 0.999))
@@ -38,9 +43,17 @@ def signal_diagnostics(output: str, text: str):
         return []
     words = len(re.findall(r"\b\w+(?:['’–-]\w+)*\b", text, flags=re.UNICODE))
     return [
-        ('script_wpm', words * 60 * sample_rate / total_frames, 'script-words/audio-duration-v1'),
-        ('quiet_frame_pct', quiet_samples * 100 / total_frames, 'rms-20ms-below-minus40dbfs-v1'),
-        ('near_clip_pct', near_clip * 100 / total_samples, 'abs-sample-ge-0.999-v1'),
+        (
+            "script_wpm",
+            words * 60 * sample_rate / total_frames,
+            "script-words/audio-duration-v1",
+        ),
+        (
+            "quiet_frame_pct",
+            quiet_samples * 100 / total_frames,
+            "rms-20ms-below-minus40dbfs-v1",
+        ),
+        ("near_clip_pct", near_clip * 100 / total_samples, "abs-sample-ge-0.999-v1"),
     ]
 
 
@@ -57,6 +70,7 @@ class Evaluator:
         device = os.getenv("EVAL_DEVICE", "cpu")
         if device == "auto":
             from models import select_device
+
             device = select_device("MODEL_DEVICE")
 
         if os.getenv("ENABLE_WHISPER", "1") == "1":
@@ -104,7 +118,11 @@ class Evaluator:
 
                 scoreq_dir = EVAL_MODELS_DIR / "scoreq"
                 scoreq_dir.mkdir(parents=True, exist_ok=True)
-                user_onnx_dir = Path(os.getenv("SCOREQ_CACHE", str(Path.home() / ".cache/scoreq/onnx-models")))
+                user_onnx_dir = Path(
+                    os.getenv(
+                        "SCOREQ_CACHE", str(Path.home() / ".cache/scoreq/onnx-models")
+                    )
+                )
                 user_onnx_dir.mkdir(parents=True, exist_ok=True)
                 # Sync any bundled ONNX files between backend/models/evaluators/scoreq and ~/.cache/scoreq
                 for src_dir, dst_dir in (
@@ -135,9 +153,9 @@ class Evaluator:
                     audio = audio.mean(axis=1)
                     if sr != target_sr:
                         g = math.gcd(sr, target_sr)
-                        audio = resample_poly(
-                            audio, target_sr // g, sr // g
-                        ).astype("float32")
+                        audio = resample_poly(audio, target_sr // g, sr // g).astype(
+                            "float32"
+                        )
                     return torch.from_numpy(audio).unsqueeze(0)
 
                 sq.load_processing = _load_processing
@@ -155,7 +173,9 @@ class Evaluator:
                 dnsmos_file = dnsmos_dir / "sig_bak_ovr.onnx"
                 if not dnsmos_file.is_file():
                     if os.getenv("APP_ENV") == "production":
-                        raise RuntimeError("Provision reviewed DNSMOS weights before production startup")
+                        raise RuntimeError(
+                            "Provision reviewed DNSMOS weights before production startup"
+                        )
                     from huggingface_hub import hf_hub_download
 
                     dl = hf_hub_download(
@@ -167,9 +187,14 @@ class Evaluator:
                     dnsmos_file = Path(dl)
 
                 import hashlib
-                expected = '269fbebdb513aa23cddfbb593542ecc540284a91849ac50516870e1ac78f6edd'
+
+                expected = (
+                    "269fbebdb513aa23cddfbb593542ecc540284a91849ac50516870e1ac78f6edd"
+                )
                 if hashlib.sha256(dnsmos_file.read_bytes()).hexdigest() != expected:
-                    raise RuntimeError('DNSMOS checkpoint does not match the reviewed Microsoft model')
+                    raise RuntimeError(
+                        "DNSMOS checkpoint does not match the reviewed Microsoft model"
+                    )
                 opts = ort.SessionOptions()
                 opts.inter_op_num_threads = 2
                 opts.intra_op_num_threads = 2
@@ -183,7 +208,15 @@ class Evaluator:
 
         self.initialization_errors = dict(self.errors)
 
-    def evaluate(self, output: str, reference: str, text: str, elapsed: float, ttft_ms: float | None = None, language: str | None = None):
+    def evaluate(
+        self,
+        output: str,
+        reference: str,
+        text: str,
+        elapsed: float,
+        ttft_ms: float | None = None,
+        language: str | None = None,
+    ):
         self.errors = dict(self.initialization_errors)
         measures = []
         with wave.open(output, "rb") as w:
@@ -193,7 +226,7 @@ class Evaluator:
         try:
             measures.extend(signal_diagnostics(output, text))
         except Exception as e:
-            self.errors['signal_diagnostics'] = str(e)
+            self.errors["signal_diagnostics"] = str(e)
         if duration:
             measures.append(("rtf", elapsed / duration, "clock"))
             if elapsed > 0:
@@ -202,7 +235,10 @@ class Evaluator:
         # Non-streaming engines do not expose token latency. Only report an
         # observed completed-audio-chunk time when the adapter recorded one.
         from models import get_timing
-        first_audio = ttft_ms if ttft_ms is not None else get_timing(output, "first_audio_ms")
+
+        first_audio = (
+            ttft_ms if ttft_ms is not None else get_timing(output, "first_audio_ms")
+        )
         if first_audio is not None:
             measures.append(("first_audio_ms", first_audio, "clock-first-audio-chunk"))
 
@@ -210,10 +246,17 @@ class Evaluator:
             try:
                 import jiwer
 
-                asr_options = {'fp16': False}
+                asr_options = {"fp16": False}
                 if language:
-                    asr_options['language'] = {'German': 'de', 'English': 'en', 'de': 'de', 'en': 'en'}[language]
-                transcription = self.asr.transcribe(output, **asr_options).get("text", "")
+                    asr_options["language"] = {
+                        "German": "de",
+                        "English": "en",
+                        "de": "de",
+                        "en": "en",
+                    }[language]
+                transcription = self.asr.transcribe(output, **asr_options).get(
+                    "text", ""
+                )
                 normalizer = jiwer.Compose(
                     [
                         jiwer.ToLowerCase(),
@@ -300,25 +343,44 @@ class Evaluator:
                 # Checkpoint identity must be verified against the upstream model.
                 chunk = 144160
                 if not len(wav):
-                    raise ValueError('Empty audio')
+                    raise ValueError("Empty audio")
                 while len(wav) < chunk:
                     wav = np.concatenate((wav, wav))
                 hops = int(np.floor(len(wav) / 16000) - 9.01) + 1
                 calibrated = []
                 raw = []
                 for i in range(hops):
-                    segment = wav[i * 16000:i * 16000 + chunk]
-                    values = self.dnsmos.run(None, {self.dnsmos.get_inputs()[0].name: np.asarray(segment, dtype=np.float32)[None, :]})[0][0]
+                    segment = wav[i * 16000 : i * 16000 + chunk]
+                    values = self.dnsmos.run(
+                        None,
+                        {
+                            self.dnsmos.get_inputs()[0].name: np.asarray(
+                                segment, dtype=np.float32
+                            )[None, :]
+                        },
+                    )[0][0]
                     raw.append(values)
-                    calibrated.append([
-                        np.polyval([-0.08397278, 1.22083953, 0.0052439], values[0]),
-                        np.polyval([-0.13166888, 1.60915514, -0.39604546], values[1]),
-                        np.polyval([-0.06766283, 1.11546468, 0.04602535], values[2]),
-                    ])
-                for suffix, values in (('_raw', raw), ('', calibrated)):
+                    calibrated.append(
+                        [
+                            np.polyval([-0.08397278, 1.22083953, 0.0052439], values[0]),
+                            np.polyval(
+                                [-0.13166888, 1.60915514, -0.39604546], values[1]
+                            ),
+                            np.polyval(
+                                [-0.06766283, 1.11546468, 0.04602535], values[2]
+                            ),
+                        ]
+                    )
+                for suffix, values in (("_raw", raw), ("", calibrated)):
                     average = np.mean(values, axis=0)
-                    for index, name in enumerate(('sig', 'bak', 'ovrl')):
-                        measures.append(('dnsmos_' + name + suffix, float(average[index]), 'dnsmos-p835-reference'))
+                    for index, name in enumerate(("sig", "bak", "ovrl")):
+                        measures.append(
+                            (
+                                "dnsmos_" + name + suffix,
+                                float(average[index]),
+                                "dnsmos-p835-reference",
+                            )
+                        )
             except Exception as e:
                 self.errors["dnsmos_predict"] = str(e)
 

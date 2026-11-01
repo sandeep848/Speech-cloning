@@ -53,9 +53,16 @@ def ensure_dependencies_installed() -> None:
         if importlib.util.find_spec(mod) is None
     ]
     if missing and not SETUP_ALLOWED:
-        raise RuntimeError("Missing dependencies: " + ", ".join(missing) + ". Install the reviewed environment first, or use --setup in development.")
+        raise RuntimeError(
+            "Missing dependencies: "
+            + ", ".join(missing)
+            + ". Install the reviewed environment first, or use --setup in development."
+        )
     if missing:
-        print(f"[setup] Installing missing packages in {sys.executable}: {', '.join(missing)}", flush=True)
+        print(
+            f"[setup] Installing missing packages in {sys.executable}: {', '.join(missing)}",
+            flush=True,
+        )
         subprocess.run(
             [sys.executable, "-m", "pip", "install", *missing],
             check=True,
@@ -64,16 +71,22 @@ def ensure_dependencies_installed() -> None:
 
 def build_frontend() -> None:
     built = ROOT / "frontend/dist/index.html"
-    sources = [* (ROOT / "frontend/src").rglob("*"),
-               ROOT / "frontend/package.json", ROOT / "frontend/package-lock.json",
-               ROOT / "frontend/vite.config.ts", ROOT / "frontend/index.html"]
+    sources = [
+        *(ROOT / "frontend/src").rglob("*"),
+        ROOT / "frontend/package.json",
+        ROOT / "frontend/package-lock.json",
+        ROOT / "frontend/vite.config.ts",
+        ROOT / "frontend/index.html",
+    ]
     if built.is_file() and all(
         not path.is_file() or path.stat().st_mtime <= built.stat().st_mtime
         for path in sources
     ):
         return
     if os.getenv("APP_ENV") == "production" and not BUILD_ALLOWED:
-        raise RuntimeError("Production frontend assets missing or stale. Build once with --build before startup.")
+        raise RuntimeError(
+            "Production frontend assets missing or stale. Build once with --build before startup."
+        )
     npm = shutil.which("npm.cmd") or shutil.which("npm")
     if not npm:
         raise RuntimeError("Frontend build missing and npm not found.")
@@ -112,10 +125,15 @@ def local_api_healthy(port: int) -> bool:
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
     try:
         import json
+
         connection.request("GET", "/api/health")
         response = connection.getresponse()
         body = json.loads(response.read(4096))
-        return response.status == 200 and body.get("status") == "ok" and body.get("inference") == "direct-single-environment"
+        return (
+            response.status == 200
+            and body.get("status") == "ok"
+            and body.get("inference") == "direct-single-environment"
+        )
     except (OSError, ValueError, http.client.HTTPException):
         return False
     finally:
@@ -126,12 +144,13 @@ def main() -> int:
     # Respect configured paths on Linux, Windows and shared university hosts.
     try:
         from dotenv import load_dotenv
+
         load_dotenv(BACKEND / ".env", override=False)
     except ImportError:
         pass
-    local_storage_base = Path(os.getenv(
-        "VOICE_STUDIO_MODEL_CACHE", str(Path.home() / ".cache/voice-studio")
-    )).expanduser()
+    local_storage_base = Path(
+        os.getenv("VOICE_STUDIO_MODEL_CACHE", str(Path.home() / ".cache/voice-studio"))
+    ).expanduser()
     for subdir in ("hf", "tts", "cosyvoice3", "qwen3"):
         (local_storage_base / subdir).mkdir(parents=True, exist_ok=True)
 
@@ -147,17 +166,42 @@ def main() -> int:
     os.environ["USE_FLAX"] = "0"
     os.environ["PYTHONUNBUFFERED"] = "1"
 
-
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--no-browser", action="store_true")
-    parser.add_argument("--backend-only", action="store_true", help="Do not build the independently hosted frontend")
-    parser.add_argument("--reuse", action="store_true", help="Exit successfully when a healthy studio API already owns the port")
+    parser.add_argument(
+        "--backend-only",
+        action="store_true",
+        help="Do not build the independently hosted frontend",
+    )
+    parser.add_argument(
+        "--reuse",
+        action="store_true",
+        help="Exit successfully when a healthy studio API already owns the port",
+    )
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--verify-only", action="store_true", help="Preload all models/metrics and run a full synthesis + evaluation check, then exit.")
-    parser.add_argument("--setup", action="store_true", help="Explicitly install missing packages (development only)")
-    parser.add_argument("--build", action="store_true", help="Explicitly build frontend assets")
-    parser.add_argument("--skip-preload", action="store_true", help="Load engines lazily on first generation")
-    parser.add_argument("--check", action="store_true", help="Validate configuration and imports without starting models")
+    parser.add_argument(
+        "--verify-only",
+        action="store_true",
+        help="Preload all models/metrics and run a full synthesis + evaluation check, then exit.",
+    )
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Explicitly install missing packages (development only)",
+    )
+    parser.add_argument(
+        "--build", action="store_true", help="Explicitly build frontend assets"
+    )
+    parser.add_argument(
+        "--skip-preload",
+        action="store_true",
+        help="Load engines lazily on first generation",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Validate configuration and imports without starting models",
+    )
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("--port must be between 1 and 65535")
@@ -165,22 +209,35 @@ def main() -> int:
     SETUP_ALLOWED, BUILD_ALLOWED = args.setup, args.build
     sys.path.insert(0, str(BACKEND))
     import security
+
     security.validate_configuration()
     if security.production() and args.setup:
-        parser.error("--setup is disabled in production; prepare the reviewed environment before deployment")
+        parser.error(
+            "--setup is disabled in production; prepare the reviewed environment before deployment"
+        )
     if args.check:
-        missing = [pkg for mod,pkg in REQUIRED_IMPORTS.items() if importlib.util.find_spec(mod) is None]
+        missing = [
+            pkg
+            for mod, pkg in REQUIRED_IMPORTS.items()
+            if importlib.util.find_spec(mod) is None
+        ]
         if missing:
             raise RuntimeError("Missing model/runtime packages: " + ", ".join(missing))
         print("Configuration and imports verified; real model execution not tested")
         return 0
     if not args.verify_only and not port_free(args.port):
         if args.reuse and local_api_healthy(args.port):
-            print(f"Voice Comparison Studio already running at http://127.0.0.1:{args.port}")
+            print(
+                f"Voice Comparison Studio already running at http://127.0.0.1:{args.port}"
+            )
             return 0
-        raise RuntimeError(f"Port {args.port} is occupied. Check the existing process; no process was terminated.")
+        raise RuntimeError(
+            f"Port {args.port} is occupied. Check the existing process; no process was terminated."
+        )
     try:
-        revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+        revision = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+        ).strip()
         os.environ.setdefault("GIT_REVISION", revision)
     except (OSError, subprocess.SubprocessError):
         os.environ.setdefault("GIT_REVISION", "unknown")
@@ -189,7 +246,9 @@ def main() -> int:
         build_frontend()
 
     if not args.verify_only and not port_free(args.port):
-        raise RuntimeError(f"Port {args.port} is already in use. Stop the existing server and retry.")
+        raise RuntimeError(
+            f"Port {args.port} is already in use. Stop the existing server and retry."
+        )
 
     sys.path.insert(0, str(BACKEND))
     import backend as studio_backend
@@ -203,26 +262,44 @@ def main() -> int:
     if args.verify_only:
         import tempfile
         from generation_config import GenerationConfig
-        reference_dir = Path(os.getenv('REFERENCE_DIR', str(BACKEND / 'reference')))
-        ref = reference_dir / 'reference.wav'
-        txt = (reference_dir / 'reference.txt').read_text(encoding='utf-8').strip()
+
+        reference_dir = Path(os.getenv("REFERENCE_DIR", str(BACKEND / "reference")))
+        ref = reference_dir / "reference.wav"
+        txt = (reference_dir / "reference.txt").read_text(encoding="utf-8").strip()
         studio_backend.DATA_LOCK.acquire()
         try:
             with tempfile.TemporaryDirectory(prefix="studio-verify-") as tmp:
                 for model_id in studio_backend.MODEL_IDS:
                     out = Path(tmp) / f"{model_id}.wav"
                     _, elapsed, _ = studio_backend.WORKERS.get(model_id).call(
-                        ("Hallo, dies ist ein Test der Sprachsynthese.", str(ref), txt, str(out), "German", GenerationConfig()),
+                        (
+                            "Hallo, dies ist ein Test der Sprachsynthese.",
+                            str(ref),
+                            txt,
+                            str(out),
+                            "German",
+                            GenerationConfig(),
+                        ),
                         timeout=float(os.getenv("GENERATION_TIMEOUT_SECONDS", "600")),
                     )
                     measured, errors = studio_backend.WORKERS.get("evaluation").call(
-                        (str(out), str(ref), "Hallo, dies ist ein Test der Sprachsynthese.", elapsed),
+                        (
+                            str(out),
+                            str(ref),
+                            "Hallo, dies ist ein Test der Sprachsynthese.",
+                            elapsed,
+                        ),
                         timeout=float(os.getenv("EVALUATION_TIMEOUT_SECONDS", "600")),
                     )
-                    metrics = {key: round(value,4) for key,value,_ in measured}
+                    metrics = {key: round(value, 4) for key, value, _ in measured}
                     if errors:
-                        raise RuntimeError("Required evaluators unavailable: " + ", ".join(errors))
-                    print(f"[verify] {model_id}: {out.stat().st_size} bytes in {elapsed:.2f}s | metrics={metrics} | unavailable={list(errors)}", flush=True)
+                        raise RuntimeError(
+                            "Required evaluators unavailable: " + ", ".join(errors)
+                        )
+                    print(
+                        f"[verify] {model_id}: {out.stat().st_size} bytes in {elapsed:.2f}s | metrics={metrics} | unavailable={list(errors)}",
+                        flush=True,
+                    )
         finally:
             studio_backend.WORKERS.close()
             if studio_backend.DATA_LOCK.begin_release():
@@ -230,12 +307,18 @@ def main() -> int:
         return 0
 
     if not port_free(args.port):
-        raise RuntimeError(f"Port {args.port} is already in use. Stop the existing server and retry.")
+        raise RuntimeError(
+            f"Port {args.port} is already in use. Stop the existing server and retry."
+        )
 
     url = f"http://127.0.0.1:{args.port}"
-    print(f"\nVoice Comparison Studio running at {url}\nPress Ctrl+C to stop.", flush=True)
+    print(
+        f"\nVoice Comparison Studio running at {url}\nPress Ctrl+C to stop.", flush=True
+    )
     if not args.no_browser:
-        threading.Thread(target=open_browser_when_ready, args=(args.port,), daemon=True).start()
+        threading.Thread(
+            target=open_browser_when_ready, args=(args.port,), daemon=True
+        ).start()
 
     import uvicorn
 
