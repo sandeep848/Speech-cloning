@@ -91,17 +91,18 @@ def model_availability(model_id: str) -> dict:
     error = _errors.get(model_id)
     loaded = model_id in _engines
     installed = _package_present(model_id)
-    ready = loaded or (installed and state not in ("loading", "failed"))
+    configured = installed and state != "failed"
+    ready = loaded and state == "ready"
     detail = error
     if not detail and state == "loading":
         detail = "Downloading/loading model weights into memory…"
     elif not detail and not installed:
         detail = f"Missing package for {model_id}; install the reviewed model environment and provision weights."
     return {
-        "configured": ready,
+        "configured": configured,
         "ready": ready,
         "loaded": loaded,
-        "state": "ready" if loaded else state,
+        "state": "ready" if ready else state,
         "detail": detail,
     }
 

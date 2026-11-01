@@ -125,7 +125,7 @@ def model_availability(model):
         state = supervised["state"]
         status.update(supervised)
         status["ready"] = supervised["loaded"]
-        status["configured"] = status["configured"]
+        status["configured"] = bool(status["configured"]) and state != "failed"
         if state == "failed":
             status["detail"] = (
                 "Model worker failed; consult server logs and retry after correcting configuration"

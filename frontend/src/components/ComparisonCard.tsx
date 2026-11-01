@@ -85,7 +85,7 @@ export function ComparisonCard({
               : job?.status === 'failed'
               ? 'Generation failed'
               : model.configured
-              ? 'Ready to generate'
+              ? model.ready ? 'Ready to generate' : 'Model will load on first generation'
               : 'Setup required'}
           </span>
         </div>
@@ -104,7 +104,7 @@ export function ComparisonCard({
               : job?.status === 'failed'
               ? 'status-error'
               : model.configured
-              ? 'status-ready'
+              ? model.ready ? 'status-ready' : 'status-neutral'
               : 'status-neutral')
           }
         >
@@ -117,7 +117,7 @@ export function ComparisonCard({
             : job?.status === 'failed'
             ? 'Failed'
             : model.configured
-            ? 'Ready'
+            ? model.ready ? 'Loaded' : model.state === 'loading' ? 'Loading' : 'Available'
             : 'Unavailable'}
         </span>
 

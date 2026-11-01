@@ -4,6 +4,7 @@ export interface Model {
   ready: boolean;
   configured: boolean;
   loaded?: boolean;
+  state?: string;
   detail?: string;
 }
 
