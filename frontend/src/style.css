@@ -1447,3 +1447,11 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
   .nav-right { justify-content:flex-start; }
   .app-status { margin-left:auto; }
 }
+
+/* Responsive studio refinements */
+:root { --studio-accent: #2563eb; --studio-border: #dce5f1; }
+body { background:linear-gradient(155deg,#f8fbff,#f0f5fc); }
+.panel,.script-container,.voice-card,.login { border-radius:18px; box-shadow:0 8px 26px #2446750a; }
+:where(button,input,textarea,select,a):focus-visible { outline:3px solid #60a5fa; outline-offset:2px; }
+button:disabled { opacity:.55; cursor:not-allowed; }
+@media(max-width:760px) { main { padding:20px 14px 44px; } .panel,.voice-card,.script-container { padding:16px; } .nav-tabs { overflow-x:auto; max-width:100%; } .voice-card audio,.audio-player-box audio { width:100%; max-width:100%; } }

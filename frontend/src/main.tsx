@@ -293,7 +293,6 @@ async function privateBlob(path: string, signal?: AbortSignal) {
   const epoch = sessionEpoch;
   const response = await fetch(API + path, { headers: sessionHeaders(), credentials: 'include', signal });
   if (epoch !== sessionEpoch) throw new Error('Session changed; previous request discarded');
-  if (epoch !== sessionEpoch) throw new Error('Session changed');
   if (!response.ok) {
     if (response.status === 401) window.dispatchEvent(new Event('studio-login'));
     throw new Error('Private download failed (' + response.status + ')');

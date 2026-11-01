@@ -107,6 +107,21 @@ def open_browser_when_ready(port: int) -> None:
         time.sleep(1)
 
 
+def local_api_healthy(port: int) -> bool:
+    """Check whether the occupied port belongs to a healthy Voice Studio API."""
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+    try:
+        import json
+        connection.request("GET", "/api/health")
+        response = connection.getresponse()
+        body = json.loads(response.read(4096))
+        return response.status == 200 and body.get("status") == "ok" and body.get("inference") == "direct-single-environment"
+    except (OSError, ValueError, http.client.HTTPException):
+        return False
+    finally:
+        connection.close()
+
+
 def main() -> int:
     # Respect configured paths on Linux, Windows and shared university hosts.
     try:
@@ -135,6 +150,8 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--backend-only", action="store_true", help="Do not build the independently hosted frontend")
+    parser.add_argument("--reuse", action="store_true", help="Exit successfully when a healthy studio API already owns the port")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--verify-only", action="store_true", help="Preload all models/metrics and run a full synthesis + evaluation check, then exit.")
     parser.add_argument("--setup", action="store_true", help="Explicitly install missing packages (development only)")
@@ -158,6 +175,9 @@ def main() -> int:
         print("Configuration and imports verified; real model execution not tested")
         return 0
     if not args.verify_only and not port_free(args.port):
+        if args.reuse and local_api_healthy(args.port):
+            print(f"Voice Comparison Studio already running at http://127.0.0.1:{args.port}")
+            return 0
         raise RuntimeError(f"Port {args.port} is occupied. Check the existing process; no process was terminated.")
     try:
         revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -165,7 +185,8 @@ def main() -> int:
     except (OSError, subprocess.SubprocessError):
         os.environ.setdefault("GIT_REVISION", "unknown")
     ensure_dependencies_installed()
-    build_frontend()
+    if not args.backend_only:
+        build_frontend()
 
     if not args.verify_only and not port_free(args.port):
         raise RuntimeError(f"Port {args.port} is already in use. Stop the existing server and retry.")
