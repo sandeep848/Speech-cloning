@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -14,8 +15,8 @@ os.environ["PRELOAD_MODELS"] = "0"
 sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(backend_dir))
 
-import backend  # noqa: E402
-import direct_inference  # noqa: E402
+import backend
+import direct_inference
 
 
 def test_health_reference_models():
@@ -56,7 +57,6 @@ def test_evaluation_saved_and_deduplicated(monkeypatch):
         batch = "test-batch"
         job = "test-job"
         output = Path(os.environ["VOICE_STUDIO_DATA"]) / "audio" / "test-result.wav"
-        output.parent.mkdir(parents=True, exist_ok=True)
         with wave.open(str(output), "wb") as w:
             w.setnchannels(1)
             w.setsampwidth(2)
@@ -82,19 +82,10 @@ def test_evaluation_saved_and_deduplicated(monkeypatch):
                 ),
             )
 
-        with backend.db() as c:
-            c.execute(
-                "INSERT INTO resource_owners VALUES ('generation',?,'development')",
-                (batch,),
-            )
-            c.execute(
-                "INSERT INTO resource_owners VALUES ('job',?,'development')", (job,)
-            )
-
         class FakeEvaluator:
             errors = {}
 
-            def evaluate(self, output, reference, text, elapsed, **options):
+            def evaluate(self, output, reference, text, elapsed):
                 assert elapsed == 2.5
                 return [
                     ("duration_s", 1.0, "wav"),
@@ -164,10 +155,7 @@ def test_auth_cookie_audio_and_cors(monkeypatch):
             ).status_code
             == 206
         )
-        assert (
-            api.delete("/api/session", headers={"X-Studio-CSRF": "1"}).status_code
-            == 200
-        )
+        assert api.delete("/api/session").status_code == 200
         assert api.get("/api/models").status_code == 401
         assert (
             api.get(
@@ -256,18 +244,11 @@ def test_evaluator_init_errors_persist(monkeypatch, tmp_path):
 def test_batch_trials_bypass_cache_and_track_children(monkeypatch):
     calls = []
 
-    async def fake_generate(request, deferred=None):
+    async def fake_generate(request):
         calls.append(request)
-        identifier = "trial-" + str(len(calls))
-        with backend.db() as c:
-            c.execute(
-                "INSERT INTO batches VALUES (?,?,?,?)",
-                (identifier, request.text, request.reference_id, time.time()),
-            )
-            backend.security.claim(c, "generation", identifier)
-        return {"id": identifier, "jobs": []}
+        return {"id": "trial-" + str(len(calls)), "jobs": []}
 
-    monkeypatch.setattr(backend, "_generate_impl", fake_generate)
+    monkeypatch.setattr(backend, "generate", fake_generate)
     monkeypatch.setattr(backend, "_batch_generations", lambda batch_id: ["tracked"])
     with TestClient(backend.app) as api:
         reference = api.get("/api/reference-profile").json()["reference"]["id"]
@@ -319,7 +300,7 @@ def test_https_cross_site_login_cookie(monkeypatch):
         assert response.status_code == 200
         cookie = response.headers["set-cookie"].lower()
         assert "secure" in cookie and "httponly" in cookie
-        assert "samesite=lax" in cookie
+        assert "samesite=none" in cookie
         assert api.get("/api/models", headers={"Origin": origin}).status_code == 200
 
 

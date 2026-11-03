@@ -1,10 +1,5 @@
 name: GitHub Pages frontend
 on:
-  push:
-    branches: [main]
-    paths:
-      - "frontend/**"
-      - ".github/workflows/deploy.yml"
   workflow_dispatch:
 permissions:
   contents: read
@@ -20,21 +15,10 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Validate backend HTTPS origin
-        env:
-          BACKEND_URL: ${{ vars.VITE_API_URL }}
-        run: |
-          if [ -n "$BACKEND_URL" ]; then
-            case "$BACKEND_URL" in https://*) ;; *) echo 'VITE_API_URL must be an HTTPS backend URL'; exit 1 ;; esac
-          else
-            echo 'Notice: VITE_API_URL not configured in Actions variables; building frontend with relative API path.'
-          fi
       - run: npm ci
         working-directory: frontend
       - run: npm run build
@@ -42,8 +26,8 @@ jobs:
         env:
           VITE_API_URL: ${{ vars.VITE_API_URL }}
           GITHUB_PAGES_BASE: /${{ github.event.repository.name }}/
-      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+      - uses: actions/upload-pages-artifact@v3
         with:
           path: frontend/dist
       - id: deployment
-        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+        uses: actions/deploy-pages@v4

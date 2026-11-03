@@ -8,12 +8,7 @@ import threading
 import traceback
 from pathlib import Path
 
-from models.cache import BoundedCache
-from models.pacing import (
-    get_speech_rate as get_speech_rate,
-    plan_speech as plan_speech,
-    slow_speech,
-)
+from models.pacing import get_speech_rate, plan_speech, slow_speech
 
 from models.qwen3 import model as qwen3_adapter
 from models.cosyvoice3 import model as cosyvoice3_adapter
@@ -39,11 +34,9 @@ def generation_language() -> str:
 def mark_first_audio() -> None:
     """Measure the first completed audio chunk, never infer token latency."""
     import time
-
     clock = _first_audio_clock.get()
     if clock is not None and clock[1] is None:
         clock[1] = (time.perf_counter() - clock[0]) * 1000
-
 
 _engines: dict[str, object] = {}
 _states: dict[str, str] = {m: "idle" for m in MODEL_IDS}
@@ -76,7 +69,9 @@ def _package_present(model_id: str) -> bool:
             or (cosyvoice3_adapter.REPO_DIR / "cosyvoice").is_dir()
             or (
                 Path(
-                    os.getenv("COSYVOICE_SOURCE", str(cosyvoice3_adapter.REPO_DIR))
+                    os.getenv(
+                        "COSYVOICE_SOURCE", str(Path.home() / "Downloads/CosyVoice")
+                    )
                 ).expanduser()
                 / "cosyvoice"
             ).is_dir()
@@ -91,18 +86,17 @@ def model_availability(model_id: str) -> dict:
     error = _errors.get(model_id)
     loaded = model_id in _engines
     installed = _package_present(model_id)
-    configured = installed and state != "failed"
-    ready = loaded and state == "ready"
+    ready = loaded or (installed and state not in ("loading", "failed"))
     detail = error
     if not detail and state == "loading":
         detail = "Downloading/loading model weights into memory…"
     elif not detail and not installed:
-        detail = f"Missing package for {model_id}; install the reviewed model environment and provision weights."
+        detail = f"Missing package for {model_id}; run python start.py to set up."
     return {
-        "configured": configured,
+        "configured": ready,
         "ready": ready,
         "loaded": loaded,
-        "state": "ready" if ready else state,
+        "state": "ready" if loaded else state,
         "detail": detail,
     }
 
@@ -143,24 +137,21 @@ def preload_all_models() -> None:
 def split_speech_sentences(text: str, max_chars: int = 220) -> list[str]:
     """Bound context without splitting ordinary commas, decimals or common titles."""
     import re
-
     if max_chars < 20:
         raise ValueError("max_chars must be at least 20")
     text = re.sub(r"\s+", " ", text).strip()
     if not text:
         return []
     # Protect decimal points and abbreviations before finding sentence boundaries.
-    protected = re.sub(r"(?<=\d)\.(?=\d)", "\ue000", text)
+    protected = re.sub(r"(?<=\d)\.(?=\d)", "\uE000", text)
     protected = re.sub(
         r"\b(?:Dr|Prof|Mr|Mrs|Ms|Sr|Jr|bzw|ca|usw|z|B|d|h)\.",
-        lambda m: m[0].replace(".", "\ue000"),
-        protected,
-        flags=re.I,
+        lambda m: m[0].replace(".", "\uE000"), protected, flags=re.I,
     )
     units = re.split(r"(?<=[.!?])\s+", protected)
     chunks, current = [], ""
     for unit in units:
-        unit = unit.replace("\ue000", ".")
+        unit = unit.replace("\uE000", ".")
         while len(unit) > max_chars:
             if current:
                 chunks.append(current)
@@ -183,7 +174,6 @@ def split_speech_sentences(text: str, max_chars: int = 220) -> list[str]:
 def trim_speech_silence(chunk, rate: int = 24000, thresh: float = 0.001):
     """Trim only quiet edges, retaining 40 ms around detected activity."""
     import numpy as np
-
     chunk = np.asarray(chunk, dtype=np.float32).reshape(-1)
     if not chunk.size or not np.isfinite(chunk).all():
         raise RuntimeError("Model returned empty or non-finite audio")
@@ -204,7 +194,6 @@ def trim_speech_silence(chunk, rate: int = 24000, thresh: float = 0.001):
 def cap_long_pauses(samples, rate: int):
     """Cap only sustained very quiet gaps; preserve normal prosody and word endings."""
     import numpy as np
-
     max_pause = float(os.getenv("MAX_INTERNAL_PAUSE_MS", "650")) / 1000
     if not 0.15 <= max_pause <= 3.0:
         raise ValueError("MAX_INTERNAL_PAUSE_MS must be between 150 and 3000")
@@ -231,7 +220,6 @@ def cap_long_pauses(samples, rate: int):
 def _edge_silence_samples(samples, rate: int) -> tuple[int, int]:
     """Count quiet edge frames so joins do not stack pauses on retained silence."""
     import numpy as np
-
     win = max(1, int(rate * 0.005))
     padded = np.pad(samples, (0, (-samples.size) % win))
     rms = np.sqrt(np.mean(padded.reshape(-1, win) ** 2, axis=1))
@@ -241,17 +229,12 @@ def _edge_silence_samples(samples, rate: int) -> tuple[int, int]:
     return int(active[0]) * win, max(0, samples.size - int(active[-1] + 1) * win)
 
 
-def assemble_speech_waveform(
-    chunks: list,
-    target_samples=None,
-    rate: int = 24000,
-    texts: list[str] | None = None,
-    pauses_ms: list[float] | None = None,
-    speech_rate: float = 1.0,
-):
+def assemble_speech_waveform(chunks: list, target_samples=None, rate: int = 24000,
+                             texts: list[str] | None = None,
+                             pauses_ms: list[float] | None = None,
+                             speech_rate: float = 1.0):
     """Preserve full phrases, gently slow speech and insert bounded boundary pauses."""
     import numpy as np
-
     if not chunks:
         raise RuntimeError("Model returned no audio chunks")
     if texts is not None and len(texts) != len(chunks):
@@ -267,18 +250,13 @@ def assemble_speech_waveform(
             # Keep edge margins out of the vocoder: stretching quiet margins can
             # smear speech into a boundary and make the effective gap too short.
             end = clean.size - tail
-            clean = np.concatenate(
-                (clean[:head], slow_speech(clean[head:end], speech_rate), clean[end:])
-            )
+            clean = np.concatenate((clean[:head],
+                                    slow_speech(clean[head:end], speech_rate),
+                                    clean[end:]))
         if i:
             previous = texts[i - 1].rstrip() if texts else ""
-            pause_ms = (
-                pauses_ms[i - 1]
-                if pauses_ms is not None
-                else 320
-                if previous.endswith((".", "!", "?"))
-                else 150
-            )
+            pause_ms = (pauses_ms[i - 1] if pauses_ms is not None else
+                        320 if previous.endswith((".", "!", "?")) else 150)
             pause_samples = max(0, int(rate * pause_ms / 1000) - previous_tail - head)
             parts.append(np.zeros(pause_samples, dtype=np.float32))
         parts.append(clean)
@@ -288,7 +266,6 @@ def assemble_speech_waveform(
 
 def _postprocess_audio(samples, rate: int, target_samples=None):
     import numpy as np
-
     samples = np.asarray(samples, dtype=np.float32).reshape(-1)
     if samples.size == 0 or not np.isfinite(samples).all():
         raise RuntimeError("Model returned empty or invalid audio")
@@ -299,7 +276,7 @@ def _postprocess_audio(samples, rate: int, target_samples=None):
     return samples
 
 
-_timing_records = BoundedCache(1024)
+_timing_records: dict[str, dict[str, float]] = {}
 
 
 def record_timing(path: str | Path, key: str, value: float) -> None:

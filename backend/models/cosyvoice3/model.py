@@ -1,7 +1,6 @@
 """CosyVoice 3 model loader and zero-shot voice cloning inference in the unified environment."""
 
 from __future__ import annotations
-from collections import OrderedDict
 from functools import partial
 import hashlib
 import os
@@ -17,7 +16,7 @@ WEIGHTS_DIR = BASE_DIR / "weights"
 HF_REPO_ID = os.getenv("COSY_HF_REPO", "FunAudioLLM/Fun-CosyVoice3-0.5B-2512")
 
 _engine = None
-_spk_cache = OrderedDict()
+_spk_cache: set[str] = set()
 
 
 def _install_runtime_shims() -> None:
@@ -81,19 +80,12 @@ def _ensure_repo_and_weights() -> Path:
         os.getenv("COSYVOICE_SOURCE", str(Path.home() / "Downloads/CosyVoice"))
     ).expanduser()
 
-    if REPO_DIR.is_symlink() and not REPO_DIR.exists():
-        REPO_DIR.unlink()
-
     if not (REPO_DIR / "cosyvoice").is_dir():
         if (external_repo / "cosyvoice").is_dir():
             REPO_DIR.parent.mkdir(parents=True, exist_ok=True)
             if not REPO_DIR.exists():
                 REPO_DIR.symlink_to(external_repo, target_is_directory=True)
         else:
-            if os.getenv("APP_ENV") == "production":
-                raise RuntimeError(
-                    "Provision reviewed CosyVoice source before production startup"
-                )
             subprocess.run(
                 [
                     "git",
@@ -133,18 +125,10 @@ def _ensure_repo_and_weights() -> Path:
                 return external_weights.resolve()
         return external_weights.resolve()
 
-    if os.getenv("APP_ENV") == "production":
-        raise RuntimeError(
-            "Provision reviewed CosyVoice weights before production startup"
-        )
     from huggingface_hub import snapshot_download
 
     target_dir.mkdir(parents=True, exist_ok=True)
-    snapshot_download(
-        repo_id=HF_REPO_ID,
-        revision=os.getenv("COSY_REVISION", "main"),
-        local_dir=str(target_dir),
-    )
+    snapshot_download(repo_id=HF_REPO_ID, local_dir=str(target_dir))
     return target_dir
 
 
@@ -201,11 +185,8 @@ def _patch_multilingual_frontend(engine) -> None:
 
     orig_text_normalize = fe.text_normalize
 
-    def _multilingual_text_normalize(
-        text: str, split: bool = True, text_frontend: bool = True
-    ):
+    def _multilingual_text_normalize(text: str, split: bool = True, text_frontend: bool = True):
         from models import generation_language
-
         lang = generation_language().strip().lower()
         if lang in ("english", "en", "chinese", "zh") or contains_chinese(text):
             return orig_text_normalize(text, split=split, text_frontend=text_frontend)
@@ -239,7 +220,6 @@ def load():
     if _engine is not None:
         return _engine
     import torch
-
     weights_dir = _ensure_repo_and_weights()
     _install_runtime_shims()
     _patch_transformers_compat()
@@ -249,10 +229,7 @@ def load():
     options = {"model_dir": str(weights_dir), "fp16": is_cuda}
     # These backends require separately installed compatible GPU dependencies
     # and artifacts. Do not silently download or enable them on ordinary hosts.
-    for variable, option in (
-        ("COSY_LOAD_TRT", "load_trt"),
-        ("COSY_LOAD_VLLM", "load_vllm"),
-    ):
+    for variable, option in (("COSY_LOAD_TRT", "load_trt"), ("COSY_LOAD_VLLM", "load_vllm")):
         if os.getenv(variable, "0") == "1":
             if not is_cuda:
                 raise ValueError(f"{variable} requires CUDA")
@@ -309,12 +286,7 @@ def synthesize(
     ).hexdigest()[:16]
     if spk_id not in _spk_cache:
         engine.add_zero_shot_spk(prompt_text, ref_str, spk_id)
-        _spk_cache[spk_id] = True
-        while len(_spk_cache) > 16:
-            expired, _ = _spk_cache.popitem(last=False)
-            engine.frontend.spk2info.pop(expired, None)
-    else:
-        _spk_cache.move_to_end(spk_id)
+        _spk_cache.add(spk_id)
 
     plan = plan_speech(clean_text)
     sentences = [item.text for item in plan]
@@ -349,11 +321,7 @@ def synthesize(
 
     if not parts:
         raise RuntimeError("CosyVoice 3 returned no audio")
-    samples = assemble_speech_waveform(
-        parts,
-        rate=rate,
-        texts=sentences,
-        pauses_ms=[item.pause_after_ms for item in plan],
-        speech_rate=1.0,
-    )
+    samples = assemble_speech_waveform(parts, rate=rate, texts=sentences,
+            pauses_ms=[item.pause_after_ms for item in plan],
+            speech_rate=1.0)
     return samples, rate

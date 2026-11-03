@@ -4,16 +4,6 @@ const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const { mkdir } = require('node:fs/promises');
 const { chromium } = require('playwright');
-const net = require('node:net');
-async function serverAcceptsConnections() {
-  return new Promise(resolve => {
-    const socket = net.createConnection({host:'127.0.0.1',port});
-    socket.setTimeout(200);
-    socket.once('connect', () => { socket.destroy(); resolve(true); });
-    socket.once('error', () => { socket.destroy(); resolve(false); });
-    socket.once('timeout', () => { socket.destroy(); resolve(false); });
-  });
-}
 const port = 4175;
 const origin = `http://127.0.0.1:${port}`;
 const server = spawn(process.execPath,
@@ -37,28 +27,18 @@ async function fits(page, name) {
   const dimensions = await page.evaluate(() => ({width:innerWidth, scroll:document.documentElement.scrollWidth}));
   assert(dimensions.scroll <= dimensions.width + 1, `${name} spills horizontally: ${JSON.stringify(dimensions)}`);
 }
-const fs = require('node:fs');
-
-function findChromium() {
-  if (process.env.CHROMIUM_EXECUTABLE) return process.env.CHROMIUM_EXECUTABLE;
-  for (const bin of ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser']) {
-    if (fs.existsSync(bin)) return bin;
-  }
-  return undefined;
-}
-
 (async () => {
   let browser;
   try {
     for(let i=0;i<150;i++) {
       if(server.exitCode !== null) throw Error('Preview server exited before becoming ready');
-      if(await serverAcceptsConnections()) break;
+      try { if((await fetch(origin)).ok) break; } catch {}
       if(i===149) throw Error('Preview server did not start');
       await new Promise(resolve=>setTimeout(resolve,100));
     }
     browser = await chromium.launch({
-      executablePath: findChromium(),
-      args: JSON.parse(process.env.CHROMIUM_ARGS || '["--no-sandbox", "--disable-setuid-sandbox"]'),
+      executablePath:process.env.CHROMIUM_EXECUTABLE || undefined,
+      args:JSON.parse(process.env.CHROMIUM_ARGS || '[]'),
     });
     for(const width of [320,360,390,430,600,768,820,1024,1280,1440]) {
       const context=await browser.newContext({viewport:{width,height:844}, hasTouch:width<=1100, isMobile:width<=760});
@@ -74,19 +54,13 @@ function findChromium() {
         else if(path.startsWith('/api/generations')) body={id:'demo',text:'Hello, world. A new paragraph.',jobs};
         else if(path.startsWith('/api/evaluations')) body={status:'completed',errors:[],metrics:[
           {name:'wer',value:.05},{name:'cer',value:.03},{name:'ecapa_similarity',value:.88},
-          {name:'scoreq',value:4},{name:'rtfx',value:1.5},{name:'rtf',value:.67},
-          {name:'script_wpm',value:135},{name:'quiet_frame_pct',value:12},{name:'near_clip_pct',value:0}]};
+          {name:'scoreq',value:4},{name:'rtfx',value:1.5},{name:'rtf',value:.67}]};
         else if(path==='/api/agreement') body={kappa:null};
         return route.fulfill({json:body});
       });
       await page.goto(origin);
       await page.getByText('German Reference Active',{exact:true}).waitFor();
       await fits(page,`${width}: initial`);
-      assert(!(await page.getByRole('combobox', {name:/^Speech rate/}).isVisible()));
-      await page.locator('.generation-settings > summary').click();
-      await page.getByRole('combobox', {name:/^Speech rate/}).selectOption('0.9');
-      await fits(page,`${width}: expanded settings`);
-      await page.locator('.generation-settings > summary').click();
       if(width<=1100) {
         assert(!(await page.locator('#sidebar-content').isVisible()),'Mobile library should start collapsed');
         await page.getByRole('button',{name:'Models & presets',exact:true}).click();
@@ -110,21 +84,14 @@ function findChromium() {
       await page.locator('.voice-card:not(.reference) audio').first().waitFor();
       await fits(page,`${width}: populated comparison`);
       assert.equal((await page.getByRole('link',{name:'Export All',exact:true}).textContent()).trim(), 'Export All');
-      if((width===390 || width===1440) && process.env.RESP_SCREENSHOTS) {
+      if(width===390 && process.env.RESP_SCREENSHOTS) {
         await mkdir(process.env.RESP_SCREENSHOTS,{recursive:true});
-        await page.screenshot({path:`${process.env.RESP_SCREENSHOTS}/${width}-compare.png`,fullPage:true});
+        await page.screenshot({path:`${process.env.RESP_SCREENSHOTS}/mobile-compare.png`,fullPage:true});
       }
       await page.getByRole('button',{name:'Benchmark Metrics',exact:true}).click();
       await page.getByRole('heading',{name:'Model Competition Matrix',exact:true}).waitFor();
       await fits(page,`${width}: metrics`);
-      assert.equal(await page.locator('.benchmark-table tbody tr').count(), 4);
-      await page.getByLabel('Metric focus').selectOption('Signal diagnostics');
-      await page.getByText('135.0 words/min', {exact:true}).first().waitFor();
-      assert.equal(await page.locator('.benchmark-table tbody tr').count(), 3);
-      assert.equal(await page.locator('.leader-badge').count(), 0);
-      await fits(page,`${width}: diagnostics`);
-      await page.getByLabel('Metric focus').selectOption('Overview');
-      if((width===390 || width===1440) && process.env.RESP_SCREENSHOTS) await page.screenshot({path:`${process.env.RESP_SCREENSHOTS}/${width}-metrics.png`,fullPage:true});
+      if(width===390 && process.env.RESP_SCREENSHOTS) await page.screenshot({path:`${process.env.RESP_SCREENSHOTS}/mobile-metrics.png`,fullPage:true});
       const table=page.getByRole('region',{name:/Model comparison metrics/});
       if(width<=760) {
         assert(await table.evaluate(e=>e.scrollWidth>e.clientWidth),'Wide metrics should scroll inside their container');
@@ -134,14 +101,13 @@ function findChromium() {
       await page.getByRole('button',{name:/Qwen3-TTS.*Health Scorecard/}).click();
       await page.getByRole('heading',{name:/Detailed Health Report/}).waitFor();
       await fits(page,`${width}: model report`);
-      await page.getByRole('button',{name:'Listening Evaluation',exact:true}).click();
+      await page.getByRole('button',{name:'Blind Evaluation',exact:true}).click();
       await page.getByLabel('Recording Engine').selectOption('job-0');
       await page.getByLabel('MOS Score').selectOption('4');
-      await page.getByLabel('Reviewer identifier').fill('Synthetic reviewer '+width);
       await page.getByRole('button',{name:'Submit Score',exact:true}).click();
       await page.getByText('Rating successfully saved.',{exact:true}).waitFor();
       await fits(page,`${width}: evaluation`);
-      if((width===390 || width===1440) && process.env.RESP_SCREENSHOTS) await page.screenshot({path:`${process.env.RESP_SCREENSHOTS}/${width}-evaluation.png`,fullPage:true});
+      if(width===390 && process.env.RESP_SCREENSHOTS) await page.screenshot({path:`${process.env.RESP_SCREENSHOTS}/mobile-evaluation.png`,fullPage:true});
       assert.deepEqual(errors,[],`Unexpected page errors at ${width}`);
       console.log(`PASS ${width}px: navigation, library, ordering, audio UI, metrics scroll, rating`);
       await context.close();
