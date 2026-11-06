@@ -35,6 +35,17 @@ SETTINGS = (
 PACKAGE_NAMES = ("torch", "torchaudio", "qwen-tts", "coqui-tts",
                  "librosa", "soundfile", "transformers", "numpy")
 DEFAULT_TEXT = "Hallo, heute testen wir die natürlich klingende Stimme. Sie spricht in normalem Tempo, mit verständlichen Pausen."
+DEFAULTS = {
+    "GENERATION_LANGUAGE": "German", "QWEN_SPEECH_RATE": "1.0",
+    "COSY_SPEECH_RATE": "1.0", "XTTS_SPEECH_RATE": "1.0",
+    "COMMA_PAUSE_MS": "120", "SENTENCE_PAUSE_MS": "260",
+    "PARAGRAPH_PAUSE_MS": "450", "CONTINUATION_PAUSE_MS": "90",
+    "SPLIT_ON_COMMA": "0", "MAX_INTERNAL_PAUSE_MS": "650",
+    "QWEN_TEMPERATURE": "0.6", "QWEN_TOP_P": "0.85",
+    "QWEN_TOP_K": "30", "QWEN_SUBTALKER_TEMP": "0.6",
+    "QWEN_SUBTALKER_TOP_P": "0.85", "XTTS_TEMPERATURE": "0.75",
+    "XTTS_REPETITION_PENALTY": "10.0", "XTTS_SPEED": "1.0",
+}
 # These are rough capacity-planning starting points, NOT measured minima.
 CAPACITY_GUIDANCE = {
     "qwen3": {"gpu_vram_gb": "8-12+ (1.7B model)", "system_ram_gb": "16-32+",
@@ -104,8 +115,9 @@ def collect_profile() -> dict:
     return {"collected_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "hardware": detect_hardware(),
             "packages": versions,
-            "active_configuration": {key: os.environ.get(key, "(unset; code default)")
+            "active_configuration": {key: os.environ.get(key, DEFAULTS.get(key, "(unset; auto/default)"))
                                      for key in SETTINGS},
+            "configuration_sources": "Shell environment overrides backend/.env; missing entries show known code defaults or auto/default.",
             "planning_guidance_not_verified_minima": CAPACITY_GUIDANCE,
             "requirements_note": "Model weight size, precision, sentence length, and runtime versions change RAM/VRAM usage. Test on target hardware.",
             "benchmarks": [], "comparison": {}}
