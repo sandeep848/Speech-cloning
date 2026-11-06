@@ -28,9 +28,10 @@ def plan_speech(text: str, max_chars: int = 220) -> list[SpeechChunk]:
     """
     if max_chars < 20:
         raise ValueError("max_chars must be at least 20")
-    comma = _pause("COMMA_PAUSE_MS", 150)
-    sentence = _pause("SENTENCE_PAUSE_MS", 320)
-    paragraph = _pause("PARAGRAPH_PAUSE_MS", 600)
+    comma = _pause("COMMA_PAUSE_MS", 120)
+    split_commas = os.getenv("SPLIT_ON_COMMA", "0").lower() in ("1", "true", "yes")
+    sentence = _pause("SENTENCE_PAUSE_MS", 260)
+    paragraph = _pause("PARAGRAPH_PAUSE_MS", 450)
     continuation = _pause("CONTINUATION_PAUSE_MS", 90)
     text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
     paragraphs = [re.sub(r"\s+", " ", p).strip()
@@ -47,7 +48,10 @@ def plan_speech(text: str, max_chars: int = 220) -> list[SpeechChunk]:
             for match in re.finditer(pattern, content):
                 protected.update(range(match.start(), match.end()))
         boundaries = []
-        for match in re.finditer(r'''[.!?]+["'”’»)]*(?=\s|$)|[,;:](?=\s|$)''', content):
+        boundary_pattern = r'''[.!?]+["'”’»)]*(?=\s|$)|[;:](?=\s|$)'''
+        if split_commas:
+            boundary_pattern += r"|,(?=\s|$)"
+        for match in re.finditer(boundary_pattern, content):
             if match.start() in protected:
                 continue
             pause = sentence if content[match.start()] in '.!?' else comma
@@ -74,7 +78,7 @@ def plan_speech(text: str, max_chars: int = 220) -> list[SpeechChunk]:
 def get_speech_rate(model_id: str) -> float:
     variable = {"qwen3": "QWEN_SPEECH_RATE", "cosyvoice3": "COSY_SPEECH_RATE",
                 "xtts-v2": "XTTS_SPEECH_RATE"}[model_id]
-    default = "0.92" if model_id == "qwen3" else "0.96"
+    default = "1.0"
     rate = float(os.getenv(variable, os.getenv("SPEECH_RATE", default)))
     if not math.isfinite(rate) or not 0.8 <= rate <= 1.1:
         raise ValueError(f"{variable} must be between 0.8 and 1.1; 1.0 keeps native speed")
