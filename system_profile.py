@@ -187,6 +187,26 @@ def run_worker(args) -> int:
     return 0 if result["status"] == "ok" else 1
 
 
+def save_report(path: Path, profile: dict) -> None:
+    """Preserve prior reports if a quota or filesystem error interrupts saving."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    import tempfile
+    temp_name = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent,
+            prefix=".system-profile-", suffix=".tmp", delete=False
+        ) as out:
+            temp_name = out.name
+            json.dump(profile, out, indent=2)
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(temp_name, path)
+    finally:
+        if temp_name is not None:
+            Path(temp_name).unlink(missing_ok=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--benchmark", action="store_true",
@@ -237,9 +257,18 @@ def main() -> int:
                         profile["benchmarks"].append({
                             "model": model, "device": device, "status": "error",
                             "error": f"Worker exited with code {proc.returncode} without results"})
-                # Write partial results after each pair.
-                args.output.parent.mkdir(parents=True, exist_ok=True)
-                args.output.write_text(json.dumps(profile, indent=2), encoding="utf-8")
+                # Persist each result, but do not truncate a previous report on failure.
+                try:
+                    save_report(args.output, profile)
+                except OSError as exc:
+                    print(f"Unable to save report: {exc}", file=sys.stderr)
+                    print("Stopping benchmarks to avoid further model downloads.", file=sys.stderr)
+                    return 1
+                if profile["benchmarks"][-1].get("status") == "error":
+                    error_text = profile["benchmarks"][-1].get("error", "").lower()
+                    if "disk quota exceeded" in error_text or "no space left on device" in error_text:
+                        print("Disk storage exhausted; stopping remaining benchmarks.", file=sys.stderr)
+                        return 1
         for model in args.models:
             rows = {r["device"]: r for r in profile["benchmarks"]
                     if r["model"] == model and r["status"] == "ok"}
@@ -254,7 +283,7 @@ def main() -> int:
             else:
                 profile["comparison"][model] = "Not measured on both CPU and GPU"
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(profile, indent=2), encoding="utf-8")
+    save_report(args.output, profile)
     print(f"Report: {args.output}")
     print("Hardware:", json.dumps(profile["hardware"], indent=2))
     if args.benchmark:
