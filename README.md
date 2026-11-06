@@ -1,216 +1,243 @@
 # Voice Comparison Studio
 
-A unified, single-environment research and benchmarking platform for state-of-the-art neural voice cloning. Run **Qwen3-TTS (1.7B)**, **CosyVoice 3 (0.5B)**, and **Coqui XTTS-v2** simultaneously side-by-side in one process, with comprehensive automated acoustic, intelligibility, speaker similarity, and latency evaluations.
+Voice Comparison Studio is a research prototype for comparing **three zero-shot voice-cloning text-to-speech (TTS) engines** under a shared workflow:
 
----
+- [Qwen3-TTS 12Hz 1.7B Base](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base)
+- [Fun-CosyVoice3 0.5B](https://huggingface.co/FunAudioLLM/Fun-CosyVoice3-0.5B-2512)
+- [Coqui XTTS-v2](https://huggingface.co/coqui/XTTS-v2)
 
-## Speech quality and timing
+It provides a React/TypeScript interface, a Python FastAPI backend, reference-voice handling, text generation, saved WAV outputs, and automated evaluation. The engines use a **single Python runtime** but may execute jobs concurrently. This is an experimental comparison tool, not a claim of production-ready cloning quality or real-time performance.
 
-- Outputs retain their generated length. They are never padded to a guessed speaking rate or truncated to make models match.
-- Speech is phrased at commas and sentence endings while retaining punctuation. Blank lines remain paragraph breaks. Decimal/thousands separators, titles and initials do not become artificial boundaries. Long phrases still split at bounded word boundaries.
-- Defaults are 150 ms at commas/semicolons/colons, 320 ms at sentence endings, 600 ms between paragraphs and 90 ms at long-phrase continuation joins. Retained model silence counts toward each pause, so gaps are not doubled.
-- Qwen speech is gently slowed to 0.92x with pitch-preserving time stretching. CosyVoice and XTTS use their native synthesis speed controls at 0.96x, avoiding an extra phase-vocoder pass. Native sample rates and inserted punctuation gaps remain unchanged.
-- Very quiet internal gaps longer than 650 ms are shortened conservatively. Set `MAX_INTERNAL_PAUSE_MS` between 150 and 3000 to change this limit.
-- Qwen caches its reference clone prompt. CosyVoice caches its zero-shot speaker and preserves multilingual text. XTTS caches conditioning from up to 30 seconds of reference with six-second chunks and uses its upstream repetition penalty of 10.
-- Language is isolated per request, including concurrent German and English jobs.
-- First audio latency is measured when an adapter returns its first completed chunk. It is not token latency or browser playback latency. True FFE is unavailable without aligned recordings of the same utterance.
+> **Research and consent:** Use reference recordings only when you have appropriate permission. Generated speech can contain pronunciation errors, identity drift, or audible synthesis artifacts. Do not present generated speech as a person's authentic recording.
 
-See [AUDIT.md](AUDIT.md) for fixes, validation and remaining limitations. No model is guaranteed to beat another: quality, identity, accuracy and speed can have different winners.
+## Quick start
 
-### Tune pacing
+### Environment
 
-These defaults work without editing `.env`. To override them, add the following to `backend/.env`, restart the server and generate new audio:
+Use a dedicated Python environment. **Python 3.12** is used by this project's CI and is the recommended project baseline; upstream model stacks have their own compatibility constraints. Node.js **22** is used by the repository's CI and deployment workflows. FFmpeg and git should be available on the host. NVIDIA CUDA is optional, but a compatible GPU can be important for practical inference throughput.
 
-```ini
-QWEN_SPEECH_RATE=0.92
-COSY_SPEECH_RATE=0.96
-XTTS_SPEECH_RATE=0.96
-COMMA_PAUSE_MS=150
-SENTENCE_PAUSE_MS=320
-PARAGRAPH_PAUSE_MS=600
-CONTINUATION_PAUSE_MS=90
+```bash
+git clone https://github.com/sandeep848/Speech-cloning.git
+cd Speech-cloning
+
+# Example, if conda is available
+conda create -n qwen3 python=3.12 -y
+conda activate qwen3
+
+cp backend/.env.example backend/.env
+python start.py --no-browser
 ```
 
-Rates are relative to model output: `1.0` preserves native speed. A common `SPEECH_RATE` can set all engines unless a model-specific rate overrides it. `XTTS_SPEED` remains its separate native inference control; keep it at `1.0` when using the shared adjustment to avoid compounding slowdowns. Blank lines create paragraph breaks; single wrapped line breaks remain inside a paragraph. Pause/rate settings are included in the generation cache key.
+Open **http://127.0.0.1:8000** when startup completes.
 
-These are configurable pacing defaults, not a guarantee of human-like speech. Clause-level synthesis can add inference overhead and reset prosody at boundaries, especially for very short phrases. Gentle time stretching can also introduce artifacts; compare actual model output and set the model-specific rate to `1.0` if preferred.
+The launcher can install missing Python packages, build the frontend using npm, obtain model weights, preload engines/evaluators, and start the API. First launch can be resource-intensive and requires internet access. It may not work unchanged on every OS or university host because CosyVoice and model-specific native dependencies can require additional setup.
 
-## Inference performance
+`start.py` options:
 
-- **Qwen:** On CUDA, the first phrase generates separately, then remaining phrases are batched in pairs. This preserves the first-audio observation point while reducing repeated generation calls. CPU defaults to individual phrases. Set `QWEN_BATCH_SIZE=1` to disable batching; values up to 8 are accepted. If a batch runs out of GPU memory, remaining phrases retry individually; unrelated decoding errors still fail explicitly.
-- **CosyVoice / XTTS:** Native speed adjustment replaces external audio stretching. Cached zero-shot speakers / XTTS conditioning are reused. Optional `COSY_LOAD_TRT=1` or `COSY_LOAD_VLLM=1` enables upstream accelerated backends only when compatible GPU dependencies and artifacts are already installed. They are off by default.
-- **Attention:** Qwen keeps SDPA by default. `QWEN_ATTN_IMPLEMENTATION=flash_attention_2` is optional and requires a compatible CUDA GPU, dtype and FlashAttention installation. It is not installed automatically.
-- **Scoring:** Automatic evaluators now default to CPU, leaving GPU memory for synthesis. `EVAL_DEVICE=cuda:0` can move them to GPU explicitly, or `auto` can select a device. CPU scoring may take longer to finish even when generation has less GPU contention.
-- **Reference quality:** `python backend/doctor.py` measures duration, sample rate, level, near-full-scale samples and DC-offset concerns without changing the reference audio. Verify that its transcript matches all spoken words.
+```bash
+python start.py --no-browser
+python start.py --port 8001 --no-browser
+python start.py --verify-only
+```
 
-These changes are inference optimizations, not trained model improvements or guaranteed score gains. GPU batching changes memory use and sampling behavior; native speed control may change output acoustics. Compare repeated uncached trials and listen blind before claiming higher quality or lower latency. The slower pacing and explicit punctuation pauses remain enabled.
+`--verify-only` loads models and attempts synthesis/evaluation; it is not a lightweight environment check. Run `python backend/doctor.py` for a lower-cost diagnostic, or `python system_profile.py` for hardware and configuration details.
 
-## Measure the models on your GPU
+### Reference audio
 
-After installing dependencies, run from the repository root:
+Use a clean recording of **one speaker**, together with an **accurate transcript** of exactly what was spoken. By default, the backend reads:
+
+- `backend/reference/reference.wav`
+- `backend/reference/reference.txt`
+
+For the English reference-profile endpoint, it looks for `reference_en.wav` and `reference_en.txt`. Reference WAV uploads are also supported in the application. The upload path accepts PCM WAV audio with a duration of **0.25–120 seconds**. Reference cleanliness, language, and transcript accuracy materially affect output quality; longer audio is not automatically better.
+
+The repository may include example reference recordings. Do not assume they are appropriate for your testing, sharing, or redistribution.
+
+## Models and upstream documentation
+
+| Adapter ID | Upstream model | Repo adapter | Documentation |
+| --- | --- | --- | --- |
+| `qwen3` | Qwen3-TTS 12Hz 1.7B Base | `backend/models/qwen3/model.py` | [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) |
+| `cosyvoice3` | Fun-CosyVoice3 0.5B | `backend/models/cosyvoice3/model.py` | [CosyVoice](https://github.com/FunAudioLLM/CosyVoice) |
+| `xtts-v2` | Coqui XTTS-v2 | `backend/models/xtts_v2/model.py` | [XTTS documentation](https://coqui-tts.readthedocs.io/en/latest/models/xtts.html) |
+
+The adapters differ in their reference conditioning, generation controls, model architectures, and dependency requirements. Consult the upstream model cards and repositories for supported platforms, model licenses, known limitations, and version-specific setup. Do not transfer benchmarks or hardware claims from one model generation to another.
+
+### Minimum CPU, RAM, and VRAM requirements
+
+**Do not treat parameter counts or estimated VRAM ranges as official minimum system requirements.** This repository does not contain a reproducible, verified minimum-hardware matrix for these exact three models. The upstream references linked above do not establish one universal RAM/VRAM requirement and CPU/GPU time for all possible backends and precisions.
+
+Actual memory and performance depend on installed weights, tensor dtype, reference and output length, batching, optional acceleration, library versions, device, and other processes. Determine suitability for **your environment** using the profiler below. A CPU-only PyTorch installation cannot benchmark CUDA even when the host physically contains a GPU.
+
+## Natural speech and pacing
+
+The shared pipeline groups text into sentence/phrase chunks, generates model-specific audio, trims/caps some silent regions, and joins the resulting clips with punctuation-aware pauses. As of the current code, **commas are not split by default**; semicolons, colons, sentence endings, paragraph boundaries, and long-word-bounded chunks can still introduce boundaries.
+
+The current in-code defaults are:
+
+| Setting | Default | Behavior |
+| --- | --- | --- |
+| `QWEN_SPEECH_RATE` | `1.0` | Native Qwen speed; values below 1 use pitch-preserving time stretching |
+| `COSY_SPEECH_RATE` | `1.0` | CosyVoice native speed parameter |
+| `XTTS_SPEECH_RATE` | `1.0` | Multiplied by `XTTS_SPEED` for XTTS native inference |
+| `SPLIT_ON_COMMA` | `0` | Set to `1` to restore explicit comma splitting |
+| `COMMA_PAUSE_MS` | `120` | Used at configured comma splits and other short phrase boundaries |
+| `SENTENCE_PAUSE_MS` | `260` | Target sentence-boundary pause |
+| `PARAGRAPH_PAUSE_MS` | `450` | Target blank-line paragraph pause |
+| `CONTINUATION_PAUSE_MS` | `90` | Target continuation pause for long text |
+| `MAX_INTERNAL_PAUSE_MS` | `650` in code | Limits sustained quiet internal gaps; `.env.example` currently sets `900` |
+
+**Environment precedence:** shell variables override `backend/.env`; `backend/.env` overrides code defaults. Copying `.env.example` establishes its own values. The previously used speed/pauses may remain active on existing installations until you change or unset the relevant variables and restart the backend.
+
+Other relevant configuration options include `QWEN_TEMPERATURE`, `QWEN_TOP_P`, `QWEN_TOP_K`, `QWEN_BATCH_SIZE`, `XTTS_TEMPERATURE`, `XTTS_REPETITION_PENALTY`, `XTTS_SPEED`, and optional CosyVoice acceleration flags. The Qwen adapter uses SDPA by default when available; FlashAttention 2 is opt-in and requires a supported environment.
+
+**Naturalness is not guaranteed by configuration alone.** For a fair comparison, use the same reference and text; listen for rhythm, pitch, pronunciation, breaks, clipping, and speaker consistency. Scores from automated metrics do not replace listening.
+
+## Inspect your hardware and actual configuration
+
+```bash
+python system_profile.py
+```
+
+The script writes `system-profile.json` and reports the current interpreter, operating system, CPU information, RAM when `psutil` is installed, PyTorch/CUDA availability, GPU name/VRAM, package versions, and TTS settings. This command **does not load model weights**.
+
+For more complete hardware reporting:
+
+```bash
+python -m pip install psutil
+python system_profile.py
+```
+
+The JSON can contain local paths and configuration information; review it before sharing.
+
+## Measure real CPU and GPU inference time
+
+The profiler measures actual generation through this repository's adapters, with a separate process for each model/device combination. It distinguishes **model load**, **warmup generation**, and **repeated inference**.
+
+```bash
+# Compare available devices; GPU entries are marked unavailable without CUDA
+python system_profile.py --benchmark \
+  --models qwen3 cosyvoice3 xtts-v2 \
+  --devices cpu gpu \
+  --repetitions 3
+
+# A smaller CPU-only experiment
+python system_profile.py --benchmark \
+  --models qwen3 \
+  --devices cpu \
+  --repetitions 3
+```
+
+The benchmark requires the reference WAV and its transcript. It may download model weights and consume substantial CPU, RAM, GPU memory, and disk space.
+
+| Report field | Interpretation |
+| --- | --- |
+| `load_seconds` | Initial model initialization time |
+| `warmup_seconds` | First generation, excluded from steady-state trials |
+| `median_seconds` | Median wall-clock generation duration |
+| `median_rtf` | Generation seconds divided by generated audio seconds; below 1 is faster than real-time |
+| `peak_gpu_allocated_gb` | Peak memory allocated by PyTorch on GPU (not total system/device utilization) |
+| `gpu_speedup` | CPU median divided by GPU median, **only** when both runs succeeded |
+
+CPU and GPU timings are **not predetermined**. GPU measurements are unavailable when the current environment cannot access CUDA. For reliable comparisons, retain the same input, reference, language, model weights, and settings; avoid competing workloads. Benchmark results describe the measured machine, not all deployments.
+
+See [SYSTEM_PROFILE.md](SYSTEM_PROFILE.md) for details. A separate research-oriented benchmark with saved WAV files and evaluation statistics is available:
 
 ```bash
 python backend/benchmark.py --language German --repetitions 3
 ```
 
-This runs an excluded warmup and three uncached trials per script and model, sequentially to reduce GPU contention. It records model-loading and first-generation warmup times separately, then saves generated WAVs, observed first-audio times, measured metrics, unavailable-metric errors, per-model medians and per-metric sample counts / means / ranges / nearest-rank p95 values under `backend/data/benchmarks/`. Listen blind as well as comparing WER/CER, ECAPA, quality scores and RTF. Use the same reference/transcript, hardware and settings for before/after runs. Numbers are ASR-sensitive; inspect transcripts when interpreting WER. English trials require an appropriate reference via `--reference` and `--transcript`.
+This benchmark uses model generation and may load evaluation systems; disable unneeded evaluators if resources are constrained.
 
----
+## Evaluation
 
-## Architecture Overview
+The backend includes these measurements, subject to dependencies and per-metric availability:
 
-```
+- **WER/CER:** Whisper recognition compared with requested text, using jiwer.
+- **ECAPA speaker similarity:** SpeechBrain embeddings comparing reference and output.
+- **SCOREQ:** A non-intrusive estimated speech-quality score.
+- **DNSMOS:** Speech/noise/overall quality estimation when the necessary model can run.
+- **Latency and RTF:** Time and throughput measurements associated with synthesis.
+
+These are different dimensions. A lower WER does not prove better naturalness; a similarity score does not prove the output is free of artifacts. An unavailable metric should be recorded as unavailable rather than invented. F0 Frame Error Rate is not implemented as a valid aligned pitch-error metric for unrelated reference/output utterances.
+
+The `backend/.env.example` template disables Whisper, ECAPA, and SCOREQ by default, while the launcher may enable some evaluators when those settings are not explicitly present. Check the **effective** environment before comparing scores.
+
+## Project layout
+
+```text
 Speech-cloning/
-├── start.py                                # Unified launcher: checks environment, preloads models & evaluators, launches API & UI
-├── NOVELTY_AND_ARCHITECTURAL_SUGGESTIONS.md # Detailed specification of novel research contributions
-├── AUDIT.md                                # Security, concurrency, and architecture audit history
+├── start.py                    # Launcher / optional verification
+├── system_profile.py           # Configuration and CPU/GPU benchmark
+├── SYSTEM_PROFILE.md           # Profiling guide
 ├── backend/
-│   ├── backend.py                          # Consolidated FastAPI service, SQLite persistence, and endpoints
-│   ├── direct_inference.py                 # Direct in-process synthesis interface
-│   ├── doctor.py                           # Non-destructive diagnostics for models, devices, and dependencies
-│   ├── evaluator.py                        # Automated multi-metric evaluation suite (WER, CER, ECAPA, ScoreQ, DNSMOS)
-│   ├── requirements.txt                    # Python dependencies
-│   ├── .env.example                        # Configuration template
-│   ├── models/                             # Unified model manager & engine adapters
-│   │   ├── __init__.py                     # Model registry, device auto-selection, natural waveform assembly
-│   │   ├── qwen3/                          # Qwen3-TTS 12Hz 1.7B Base loader, prompt caching, synthesis
-│   │   ├── cosyvoice3/                     # CosyVoice 3 0.5B loader, runtime shims, zero-shot synthesis
-│   │   ├── xtts_v2/                        # Coqui XTTS-v2 loader, voice clone conditioning, synthesis
-│   │   └── evaluators/                     # Evaluator checkpoints, ONNX models, and caches
-│   ├── reference/                          # Reference speech recordings (.wav) and transcripts (.txt)
-│   │   ├── reference.wav                   # Primary reference audio
-│   │   ├── reference.txt                   # Primary reference transcript
-│   │   ├── reference_1.wav                 # Alternate reference audio
-│   │   └── reference_1.txt                 # Alternate reference transcript
-│   └── tests/
-│       └── test_api.py                     # API, authentication, concurrency, and evaluation regression tests
-├── frontend/                               # Modern React 18 + TypeScript + Vite UI
-│   ├── src/
-│   │   ├── main.tsx                        # Main UI with interactive cross-fader, radar matrix, pitch overlay, blind MOS
-│   │   ├── style.css                       # Dark theme responsive styling
-│   │   └── vite-env.d.ts                   # TypeScript Vite definitions
-│   ├── index.html                          # Single-page application entry point
-│   ├── package.json                        # Frontend dependencies & build scripts
-│   ├── tsconfig.json                       # TypeScript compiler configuration
-│   └── vite.config.ts                      # Vite configuration & dev proxy
-├── deploy/                                 # Production deployment templates
-│   ├── Caddyfile                           # Reverse proxy with automatic HTTPS
-│   └── voice-studio.service                # Systemd service unit template
-└── .github/workflows/
-    ├── ci.yml                              # Automated backend tests and frontend production build verification
-    └── deploy.yml                          # Optional manual GitHub Pages deployment
+│   ├── backend.py              # FastAPI routes and SQLite persistence
+│   ├── direct_inference.py     # Synthesis interface
+│   ├── doctor.py               # Reference and model diagnostics
+│   ├── benchmark.py            # Multi-script research benchmark
+│   ├── evaluator.py            # Automated acoustic/speech metrics
+│   ├── .env.example            # Environment configuration example
+│   ├── requirements.txt        # Python packages
+│   ├── models/
+│   │   ├── pacing.py           # Text phrasing and rate control
+│   │   ├── qwen3/
+│   │   ├── cosyvoice3/
+│   │   └── xtts_v2/
+│   ├── reference/              # Reference WAV and transcript files
+│   └── tests/                  # Backend regression tests
+├── frontend/
+│   ├── src/                    # React + TypeScript UI
+│   └── package.json
+├── deploy/                     # Caddy and systemd templates
+└── .github/workflows/          # CI and Pages deployment
 ```
 
----
-
-## Supported Neural TTS Models
-
-| Engine | Parameter Size | Architecture | Strengths |
-| :--- | :--- | :--- | :--- |
-| **Qwen3-TTS** | 1.7B | Autoregressive + 12Hz Continuous Audio Codec | Exceptional naturalness, deep prosodic fidelity, strong zero-shot speaker capture. |
-| **CosyVoice 3** | 0.5B | Multi-Stage Flow Matching + LLM Backbone | Zero-shot multilingual synthesis; benchmark speed on your hardware. |
-| **Coqui XTTS-v2** | Multilingual | Autoregressive + HiFi-GAN Vocoder | Multilingual cloning with cached speaker conditioning. |
-
----
-
-## Automated Multi-Metric Evaluation Suite
-
-All generated recordings are automatically benchmarked against the target reference voice:
-
-- **Speech Intelligibility & Accuracy**:
-  - **Word Error Rate (WER)**: Whisper transcription accuracy normalized via `jiwer`.
-  - **Character Error Rate (CER)**: Fine-grained character/phoneme substitution tracking.
-- **Speaker Identity Replication**:
-  - **ECAPA-TDNN Similarity**: SpeechBrain ECAPA cosine similarity score ($\text{target} > 0.80$).
-- **Acoustic Quality & Naturalness**:
-  - **ScoreQ Quality Score**: Non-intrusive neural Mean Opinion Score (1.00 – 5.00).
-  - **Microsoft DNSMOS P.835**: Speech quality (SIG), background noise distortion (BAK), and overall quality (OVRL).
-- **Pitch & Inflection Accuracy**:
-  - **FFE**: Unavailable for unaligned reference and generated speech; no substitute score is fabricated.
-- **Computational Throughput & Latency**:
-  - **Generation Latency ($s$)**: End-to-end model execution time.
-  - **Real-Time Factor (RTF)**: Generation seconds divided by audio duration seconds.
-  - **Inverse RTF ($\text{RTFx}$)**: Speedup over real-time playback ($\text{target} > 1.25\times$).
-  - **Time to First Audio Chunk**: Observed completion time of the first generated chunk, excluding model loading.
-
----
-
-## Quick Start
-
-### 1. Prerequisites
-- **Python**: 3.10 – 3.13 (Python 3.12 recommended)
-- **Node.js**: v20+ and npm
-- **GPU**: NVIDIA GPU with CUDA recommended for real-time inference (CPU execution fallback supported)
-
-### 2. Single-Step Launch
-
-The studio provides an all-in-one launcher `start.py` that verifies dependencies, preloads models and evaluators into memory, builds the frontend if needed, and starts the studio at `http://127.0.0.1:8000`:
+## Test and troubleshoot
 
 ```bash
-python start.py
-```
+# Confirm interpreter and available model adapters
+python -c "import sys; print(sys.executable)"
+python backend/doctor.py
 
-Options:
-- `--port <PORT>`: Specify listening port (default: `8000`).
-- `--no-browser`: Do not automatically open the default web browser.
-- `--verify-only`: Preload models, run a test synthesis and metric evaluation pass, print results, and exit.
+# Backend regression tests
+python -m pytest backend/tests -q
 
-### 3. Manual Step-by-Step Setup (Alternative)
-
-```bash
-# 1. Install Python dependencies
-python -m pip install -r backend/requirements.txt
-
-# 2. Build the React frontend
+# Frontend build
 cd frontend
 npm ci
 npm run build
 cd ..
 
-# 3. Start the FastAPI server
-python -m uvicorn backend.backend:app --host 127.0.0.1 --port 8000
+# Backend health endpoint (after starting the server)
+curl http://127.0.0.1:8000/api/health
 ```
 
-Open **http://127.0.0.1:8000** in your browser.
+If the backend cannot import dependencies, use `python -m pip` from the **same environment** as the running Python interpreter. `start.py` may switch into a local `qwen3` conda environment if necessary, so check its printed interpreter path. If the frontend cannot reach the API, confirm that the server is running, inspect the browser console and CORS settings, and check the configured API URL.
 
----
+For GPU detection, compare `nvidia-smi` (when available) with:
 
-## Diagnostics & Verification
-
-### Run Doctor Diagnostics
-To verify Python packages, CUDA GPU availability, and model readiness:
 ```bash
-python backend/doctor.py
+python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
 ```
 
-### Run Automated Backend Tests
-```bash
-pytest backend/tests -v
-```
+PyTorch `+cpu` builds will not use CUDA. A CPU/GPU time comparison must be executed rather than inferred from GPU name or parameter count.
 
-### Build & Verify Frontend
-```bash
-cd frontend
-npm ci
-npm run build
-npm audit --audit-level=moderate
-```
+## Deployment and security limitations
 
----
+The React frontend can be built as static files. GitHub Pages deployment is defined in `.github/workflows/deploy.yml` and depends on a reachable backend URL configured with `VITE_API_URL`. **GitHub Pages does not host the Python inference backend.** The backend must run independently and be reachable over HTTPS when the frontend is served over HTTPS.
 
-## Production Deployment
+``backend/.env`` can hold `CORS_ORIGINS`, `API_TOKEN`, `ADMIN_TOKEN`, and model paths. **Do not interpret the presence of token configuration variables as proof that all API endpoints are authenticated or that user data is isolated.** Verify endpoint authorization, access controls, private data handling, rate limits, storage permissions, secrets, and TLS before allowing untrusted public users. See [AUDIT.md](AUDIT.md) for historical review notes; these do not replace a current security assessment.
 
-A production deployment runs the FastAPI server behind a reverse proxy (e.g., Caddy or Nginx) handling HTTPS:
+Production templates exist in `deploy/Caddyfile` and `deploy/voice-studio.service`; adapt them to the actual host, permissions, domain, TLS, and process manager. Avoid public deployment until authentication and tenant isolation are verified.
 
-1. Copy and adjust `backend/.env.example` to `backend/.env`.
-2. Configure authentication tokens:
-   - `API_TOKEN`: Secret for general studio access.
-   - `ADMIN_TOKEN`: Secret for administrative actions (e.g., reloading reference voice).
-3. Use the systemd template in `deploy/voice-studio.service` for managed process lifecycle.
-4. Adapt `deploy/Caddyfile` for automated TLS certificate provisioning and secure HTTP headers.
+## Licensing and attribution
 
----
+Application code, third-party packages, and model checkpoints can have **different licenses and usage restrictions**. Review the [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS), [CosyVoice](https://github.com/FunAudioLLM/CosyVoice), and [Coqui XTTS-v2](https://huggingface.co/coqui/XTTS-v2) license terms before redistribution or commercial use. Confirm that this repository includes an explicit project license before describing the application itself as licensed under any particular terms.
 
-## License
+## Additional references
 
-This project is licensed under the Apache License 2.0. Model checkpoints are subject to their respective upstream licenses (Qwen License, FunAudioLLM License, Coqui Public Model License).
+- [Qwen3-TTS documentation](https://github.com/QwenLM/Qwen3-TTS)
+- [CosyVoice documentation](https://github.com/FunAudioLLM/CosyVoice)
+- [XTTS-v2 documentation](https://coqui-tts.readthedocs.io/en/latest/models/xtts.html)
+- [Hardware/benchmark profiler guide](SYSTEM_PROFILE.md)
+- [Repository audit notes](AUDIT.md)
