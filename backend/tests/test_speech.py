@@ -40,7 +40,7 @@ def test_comma_and_sentence_boundaries_keep_context():
 def test_join_pause_is_bounded_and_preserves_all_speech():
     a = tone()
     result = models.assemble_speech_waveform([a, a], 24000 * 40, texts=['Hello.', 'World.'])
-    assert len(result) == len(a) * 2 + int(24000 * .32)
+    assert len(result) == len(a) * 2 + int(24000 * .26)
     np.testing.assert_array_equal(result[:len(a)], a)
     np.testing.assert_array_equal(result[-len(a):], a)
 
