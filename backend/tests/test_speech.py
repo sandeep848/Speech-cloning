@@ -139,8 +139,8 @@ def test_qwen_adapter_keeps_context_and_native_rate(monkeypatch, tmp_path):
     text = 'Hello, world.\n\nAnother sentence.'
     samples, rate = adapter.synthesize(text, ref, 'Reference transcript', target_samples=999999)
     assert rate == 22050
-    assert abs(len(samples) / rate - (1.5 / .92 + .15 + .60)) < .02
-    assert [c['text'] for c in calls] == ['Hello,', 'world.', 'Another sentence.']
+    assert abs(len(samples) / rate - (1.0 + .45)) < .02
+    assert [c['text'] for c in calls] == ['Hello, world.', 'Another sentence.']
     assert all(c['voice_clone_prompt'] == ['cached-prompt'] for c in calls)
 
 
@@ -163,12 +163,12 @@ def test_xtts_uses_full_reference_conditioning(monkeypatch, tmp_path):
     ref.touch()
     for _ in range(2):
         samples, rate = adapter.synthesize('Hallo, Welt.\n\nNoch ein Satz.', ref, '')
-        assert abs(len(samples) / rate - (1.5 / .96 + .15 + .60)) < .02
+        assert abs(len(samples) / rate - (1.0 + .45)) < .02
     assert len(conditioning) == 1
     assert conditioning[0]['audio_path'] == [str(ref)]
     assert conditioning[0]['gpt_cond_len'] == 30
     assert calls[0]['repetition_penalty'] == 10.0
-    assert calls[0]['speed'] == .96
+    assert calls[0]['speed'] == 1.0
 
 
 def test_cosy_internal_pieces_are_contiguous(monkeypatch, tmp_path):
@@ -191,8 +191,8 @@ def test_cosy_internal_pieces_are_contiguous(monkeypatch, tmp_path):
     ref.touch()
     text = 'The year is 1980, and the price is 1.85 euros.'
     samples, rate = adapter.synthesize(text, ref, 'My reference transcript.')
-    assert abs(len(samples) / rate - (2 / .96 + .15)) < .02
-    assert len(calls) == 2
+    assert abs(len(samples) / rate - 1.0) < .02
+    assert len(calls) == 1
     assert ' '.join(c['tts_text'] for c in calls) == text
-    assert calls[1]['tts_text'] == 'and the price is 1.85 euros.'
-    assert all(c['speed'] == .96 for c in calls)
+    assert calls[0]['tts_text'] == text
+    assert all(c['speed'] == 1.0 for c in calls)
