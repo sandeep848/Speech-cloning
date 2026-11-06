@@ -13,8 +13,8 @@ from models.pacing import get_speech_rate, plan_speech, slow_speech
 def test_distinct_comma_sentence_and_paragraph_pauses():
     plan = plan_speech('Hello, this is a sentence. Next sentence!\n\nNew paragraph, then goodbye.')
     assert [c.text for c in plan] == [
-        'Hello,', 'this is a sentence.', 'Next sentence!', 'New paragraph,', 'then goodbye.']
-    assert [c.pause_after_ms for c in plan] == [150, 320, 600, 150, 320]
+        'Hello, this is a sentence.', 'Next sentence!', 'New paragraph, then goodbye.']
+    assert [c.pause_after_ms for c in plan] == [260, 450, 260]
 
 
 def test_paragraph_break_after_unpunctuated_text_is_retained():
@@ -32,7 +32,7 @@ def test_numbers_titles_initials_and_quotes_are_preserved():
     text = 'Dr. A. Müller zahlt 1,85 Euro, bzw. 65.000 Euro. "Goodbye!"'
     plan = plan_speech(text)
     assert [c.text for c in plan] == [
-        'Dr. A. Müller zahlt 1,85 Euro,', 'bzw. 65.000 Euro.', '"Goodbye!"']
+        'Dr. A. Müller zahlt 1,85 Euro, bzw. 65.000 Euro.', '"Goodbye!"']
     assert ' '.join(c.text for c in plan) == text
 
 
@@ -51,7 +51,7 @@ def test_user_can_tune_pauses(monkeypatch):
     monkeypatch.setenv('SENTENCE_PAUSE_MS', '350')
     monkeypatch.setenv('PARAGRAPH_PAUSE_MS', '700')
     plan = plan_speech('Hi, there.\n\nNext. End.')
-    assert [c.pause_after_ms for c in plan] == [180, 700, 350, 350]
+    assert [c.pause_after_ms for c in plan] == [700, 350, 350]
 
 
 @pytest.mark.parametrize('value', ['nan', 'inf', '-1', '2000'])
@@ -64,8 +64,8 @@ def test_invalid_pause_settings_fail_clearly(monkeypatch, value):
 def test_model_rate_defaults_and_override_precedence(monkeypatch):
     for name in ('SPEECH_RATE', 'QWEN_SPEECH_RATE', 'COSY_SPEECH_RATE', 'XTTS_SPEECH_RATE'):
         monkeypatch.delenv(name, raising=False)
-    assert get_speech_rate('qwen3') == .92
-    assert get_speech_rate('cosyvoice3') == get_speech_rate('xtts-v2') == .96
+    assert get_speech_rate('qwen3') == 1.0
+    assert get_speech_rate('cosyvoice3') == get_speech_rate('xtts-v2') == 1.0
     monkeypatch.setenv('SPEECH_RATE', '0.95')
     assert get_speech_rate('qwen3') == .95
     monkeypatch.setenv('QWEN_SPEECH_RATE', '1.0')
@@ -110,3 +110,13 @@ def test_punctuation_gaps_are_not_stretched_or_doubled():
 def test_assembly_rejects_missing_text_chunk():
     with pytest.raises(ValueError, match='counts must match'):
         assemble_speech_waveform([np.ones(100)], texts=['one', 'two'])
+
+
+def test_optional_legacy_comma_splitting(monkeypatch):
+    monkeypatch.setenv('SPLIT_ON_COMMA', '1')
+    assert [c.text for c in plan_speech('Hello, world.')] == ['Hello,', 'world.']
+
+
+def test_default_preserves_comma_prosody(monkeypatch):
+    monkeypatch.delenv('SPLIT_ON_COMMA', raising=False)
+    assert [c.text for c in plan_speech('Hello, world.')] == ['Hello, world.']
