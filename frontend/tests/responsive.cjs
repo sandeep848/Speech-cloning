@@ -47,6 +47,8 @@ async function fits(page, name) {
       page.on('pageerror', e=>errors.push(e.message));
       await page.route('**/api/**', async route=>{
         const path=new URL(route.request().url()).pathname;
+        // Source modules such as /src/api/client.ts are not backend API calls.
+        if (!path.startsWith('/api/')) return route.continue();
         if(path.includes('/audio')) return route.fulfill({contentType:'audio/wav',body:wav});
         let body={};
         if(path==='/api/models') body=models;
