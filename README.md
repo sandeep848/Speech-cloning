@@ -241,3 +241,7 @@ Application code, third-party packages, and model checkpoints can have **differe
 - [XTTS-v2 documentation](https://coqui-tts.readthedocs.io/en/latest/models/xtts.html)
 - [Hardware/benchmark profiler guide](SYSTEM_PROFILE.md)
 - [Repository audit notes](AUDIT.md)
+
+## Contributor safeguards
+
+See [contribution rules](docs/CONTRIBUTING.md), [implementation status and remaining acceptance work](docs/IMPLEMENTATION_STATUS.md), and [release validation](docs/DEPLOYMENT.md). Component CI runs on every push; **Final checks** requires every component to succeed. Shared function contracts are versioned under `backend/app/contracts/`.

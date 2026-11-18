@@ -1,0 +1,10 @@
+# Replace/add real team handles when collaborators accept ownership.
+* @sandeep848
+/frontend/ @sandeep848
+/backend/ @sandeep848
+/backend/app/contracts/ @sandeep848
+/backend/app/security/ @sandeep848
+/backend/app/db/ @sandeep848
+/.github/ @sandeep848
+/scripts/ @sandeep848
+/deploy/ @sandeep848

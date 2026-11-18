@@ -1,5 +1,4 @@
 import os
-import shutil
 import sys
 import tempfile
 import threading
@@ -12,6 +11,12 @@ backend_dir = Path(__file__).resolve().parents[1]
 project_root = Path(__file__).resolve().parents[2]
 os.environ["VOICE_STUDIO_DATA"] = tempfile.mkdtemp(prefix="studio-test-")
 os.environ["PRELOAD_MODELS"] = "0"
+os.environ["REFERENCE_DIR"] = tempfile.mkdtemp(prefix="studio-reference-")
+with wave.open(str(Path(os.environ["REFERENCE_DIR"]) / "reference.wav"), "wb") as sample:
+    sample.setnchannels(1)
+    sample.setsampwidth(2)
+    sample.setframerate(24000)
+    sample.writeframes(bytes(48000))
 sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(backend_dir))
 
@@ -314,3 +319,32 @@ def test_local_http_login_cookie_remains_usable(monkeypatch):
         assert "samesite=lax" in cookie
         assert "; secure" not in cookie
         assert api.get("/api/models").status_code == 200
+
+
+def test_upload_is_bounded_and_invalid_audio_is_safe():
+    with TestClient(backend.app) as api:
+        oversized = api.post('/api/references/upload', files={
+            'file': ('large.wav', bytes(16 * 1024 * 1024 + 1), 'audio/wav')})
+        assert oversized.status_code == 413
+        malformed = api.post('/api/references/upload', files={
+            'file': ('bad.wav', bytes(100), 'audio/wav')})
+        assert malformed.status_code == 400
+        assert malformed.json() == {'detail': 'Invalid PCM WAV file'}
+        long_text = api.post('/api/references/upload',
+            data={'transcript': 'x' * 4001},
+            files={'file': ('test.wav', bytes(100), 'audio/wav')})
+        assert long_text.status_code == 422
+
+
+def test_production_rejects_unsafe_configuration(monkeypatch):
+    import pytest
+    monkeypatch.setenv('STUDIO_ENV', 'production')
+    monkeypatch.setenv('API_TOKEN', 'short')
+    with pytest.raises(RuntimeError, match='API_TOKEN'):
+        with TestClient(backend.app):
+            pass
+    monkeypatch.setenv('API_TOKEN', 'x' * 32)
+    monkeypatch.setenv('COOKIE_SECURE', '0')
+    with pytest.raises(RuntimeError, match='COOKIE_SECURE'):
+        with TestClient(backend.app):
+            pass

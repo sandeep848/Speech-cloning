@@ -10,14 +10,13 @@ import json
 import math
 import os
 import shutil
-import sqlite3
 import threading
 import time
 import uuid
 import wave
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -30,6 +29,8 @@ from pydantic import BaseModel, Field
 load_dotenv(Path(__file__).parent / ".env", override=False)
 
 import direct_inference
+from app.db.connection import connect
+from app.security.session import authenticated, session_signature
 
 ROOT = Path(
     os.environ.get("VOICE_STUDIO_DATA", Path(__file__).parent / "data")
@@ -81,6 +82,11 @@ def _startup_preload():
 
 @asynccontextmanager
 async def lifespan(app):
+    if os.getenv("STUDIO_ENV") == "production":
+        if len(os.getenv("API_TOKEN", "")) < 32:
+            raise RuntimeError("Production requires an API_TOKEN of at least 32 characters")
+        if os.getenv("COOKIE_SECURE") != "1":
+            raise RuntimeError("Production requires COOKIE_SECURE=1 and HTTPS")
     load_backend_reference()
     if os.getenv("PRELOAD_MODELS", "1") == "1":
         threading.Thread(target=_startup_preload, daemon=True).start()
@@ -95,15 +101,8 @@ app = FastAPI(title="Voice Comparison Studio", version="1.0.0", lifespan=lifespa
 
 
 
-@contextmanager
 def db():
-    connection = sqlite3.connect(DB, timeout=30)
-    connection.row_factory = sqlite3.Row
-    try:
-        yield connection
-        connection.commit()
-    finally:
-        connection.close()
+    return connect(DB)
 
 
 with db() as c:
@@ -352,7 +351,12 @@ async def upload_reference(
 ):
     if not file.filename or not file.filename.lower().endswith(".wav"):
         raise HTTPException(400, "Reference must be a .wav file")
-    content = await file.read()
+    # Bound memory even for chunked uploads without a Content-Length header.
+    content = await file.read(16 * 1024 * 1024 + 1)
+    if len(content) > 16 * 1024 * 1024:
+        raise HTTPException(413, "Reference exceeds the 16 MiB limit")
+    if len(transcript) > 4000:
+        raise HTTPException(422, "Reference transcript exceeds 4000 characters")
     if len(content) < 44:
         raise HTTPException(400, "Invalid WAV file")
     try:
@@ -360,8 +364,8 @@ async def upload_reference(
             duration = reader.getnframes() / reader.getframerate()
             if duration < 0.25 or duration > 120:
                 raise ValueError("Reference WAV must be 0.25-120 seconds long")
-    except Exception as exc:
-        raise HTTPException(400, f"Invalid PCM WAV file: {exc}")
+    except (wave.Error, ValueError, EOFError, ZeroDivisionError):
+        raise HTTPException(400, "Invalid PCM WAV file")
 
     REFERENCE_DIR.mkdir(parents=True, exist_ok=True)
     REFERENCE_AUDIO.write_bytes(content)
@@ -980,28 +984,6 @@ def export_batch(batch_id: str):
     )
 
 
-def session_signature(stamp):
-    return hmac.new(
-        os.environ.get("API_TOKEN", "").encode(), stamp.encode(), hashlib.sha256
-    ).hexdigest()
-
-
-def authenticated(request):
-    token = os.getenv("API_TOKEN")
-    if not token:
-        return True
-    if hmac.compare_digest(
-        request.headers.get("authorization", ""), "Bearer " + token
-    ):
-        return True
-    value = request.cookies.get("studio_session", "")
-    try:
-        stamp, signature = value.split(".", 1)
-        return 0 <= time.time() - int(stamp) < 43200 and hmac.compare_digest(
-            signature, session_signature(stamp)
-        )
-    except (ValueError, TypeError):
-        return False
 
 
 class Login(BaseModel):

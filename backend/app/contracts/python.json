@@ -1,0 +1,475 @@
+{
+  "backend/app/db/connection.py:connect": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='path')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [
+      "Name(id='contextmanager', ctx=Load())"
+    ],
+    "returns": null
+  },
+  "backend/app/security/session.py:authenticated": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='request')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/app/security/session.py:session_signature": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='stamp')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/backend.py:BatchRequest": {
+    "fields": [
+      "AnnAssign(target=Name(id='reference_id', ctx=Store()), annotation=Name(id='str', ctx=Load()), simple=1)",
+      "AnnAssign(target=Name(id='models', ctx=Store()), annotation=Subscript(value=Name(id='list', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()), value=Call(func=Name(id='Field', ctx=Load()), args=[], keywords=[keyword(arg='min_length', value=Constant(value=1)), keyword(arg='max_length', value=Constant(value=3))]), simple=1)",
+      "AnnAssign(target=Name(id='texts', ctx=Store()), annotation=Subscript(value=Name(id='list', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()), value=Call(func=Name(id='Field', ctx=Load()), args=[], keywords=[keyword(arg='min_length', value=Constant(value=1)), keyword(arg='max_length', value=Constant(value=100))]), simple=1)",
+      "AnnAssign(target=Name(id='repetitions', ctx=Store()), annotation=Name(id='int', ctx=Load()), value=Call(func=Name(id='Field', ctx=Load()), args=[], keywords=[keyword(arg='default', value=Constant(value=1)), keyword(arg='ge', value=Constant(value=1)), keyword(arg='le', value=Constant(value=20))]), simple=1)",
+      "AnnAssign(target=Name(id='reference_text', ctx=Store()), annotation=Name(id='str', ctx=Load()), value=Constant(value=''), simple=1)"
+    ],
+    "methods": {}
+  },
+  "backend/backend.py:GenerateRequest": {
+    "fields": [
+      "AnnAssign(target=Name(id='use_cache', ctx=Store()), annotation=Name(id='bool', ctx=Load()), value=Constant(value=True), simple=1)",
+      "AnnAssign(target=Name(id='text', ctx=Store()), annotation=Name(id='str', ctx=Load()), value=Call(func=Name(id='Field', ctx=Load()), args=[], keywords=[keyword(arg='min_length', value=Constant(value=1)), keyword(arg='max_length', value=Constant(value=2000))]), simple=1)",
+      "AnnAssign(target=Name(id='reference_id', ctx=Store()), annotation=BinOp(left=Name(id='str', ctx=Load()), op=BitOr(), right=Constant(value=None)), value=Constant(value=None), simple=1)",
+      "AnnAssign(target=Name(id='models', ctx=Store()), annotation=Subscript(value=Name(id='list', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()), value=Call(func=Name(id='Field', ctx=Load()), args=[], keywords=[keyword(arg='min_length', value=Constant(value=1)), keyword(arg='max_length', value=Constant(value=3))]), simple=1)",
+      "AnnAssign(target=Name(id='reference_text', ctx=Store()), annotation=Name(id='str', ctx=Load()), value=Call(func=Name(id='Field', ctx=Load()), args=[], keywords=[keyword(arg='default', value=Constant(value='')), keyword(arg='max_length', value=Constant(value=4000))]), simple=1)",
+      "AnnAssign(target=Name(id='language', ctx=Store()), annotation=Name(id='str', ctx=Load()), value=Constant(value='German'), simple=1)"
+    ],
+    "methods": {}
+  },
+  "backend/backend.py:LayoutRequest": {
+    "fields": [
+      "AnnAssign(target=Name(id='active', ctx=Store()), annotation=Subscript(value=Name(id='list', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()), simple=1)"
+    ],
+    "methods": {}
+  },
+  "backend/backend.py:Login": {
+    "fields": [
+      "AnnAssign(target=Name(id='token', ctx=Store()), annotation=Name(id='str', ctx=Load()), value=Call(func=Name(id='Field', ctx=Load()), args=[], keywords=[keyword(arg='max_length', value=Constant(value=1000))]), simple=1)"
+    ],
+    "methods": {}
+  },
+  "backend/backend.py:RatingRequest": {
+    "fields": [
+      "AnnAssign(target=Name(id='job_id', ctx=Store()), annotation=Name(id='str', ctx=Load()), simple=1)",
+      "AnnAssign(target=Name(id='rater', ctx=Store()), annotation=Name(id='str', ctx=Load()), value=Call(func=Name(id='Field', ctx=Load()), args=[], keywords=[keyword(arg='default', value=Constant(value='Evaluator')), keyword(arg='min_length', value=Constant(value=1)), keyword(arg='max_length', value=Constant(value=100))]), simple=1)",
+      "AnnAssign(target=Name(id='category', ctx=Store()), annotation=Name(id='str', ctx=Load()), value=Call(func=Name(id='Field', ctx=Load()), args=[], keywords=[keyword(arg='pattern', value=Constant(value='^(naturalness|similarity|intelligibility)$'))]), simple=1)",
+      "AnnAssign(target=Name(id='rating', ctx=Store()), annotation=Name(id='int', ctx=Load()), value=Call(func=Name(id='Field', ctx=Load()), args=[], keywords=[keyword(arg='ge', value=Constant(value=1)), keyword(arg='le', value=Constant(value=5))]), simple=1)"
+    ],
+    "methods": {}
+  },
+  "backend/backend.py:add_rating": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='body', annotation=Name(id='RatingRequest', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='post', ctx=Load()), args=[Constant(value='/api/ratings')], keywords=[])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:agreement": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='category', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='naturalness')])",
+    "async": false,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='get', ctx=Load()), args=[Constant(value='/api/agreement')], keywords=[])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:auto_evaluate": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='job_id')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/backend.py:batch": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='batch_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='get', ctx=Load()), args=[Constant(value='/api/generations/{batch_id}')], keywords=[])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:batch_experiment": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='body', annotation=Name(id='BatchRequest', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": true,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='post', ctx=Load()), args=[Constant(value='/api/batches')], keywords=[keyword(arg='status_code', value=Constant(value=202))])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:batch_status": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='batch_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='get', ctx=Load()), args=[Constant(value='/api/batches/{batch_id}')], keywords=[])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:db": {
+    "arguments": "arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/backend.py:evaluate_job": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='job_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/backend.py:evaluation_errors": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='job_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='get', ctx=Load()), args=[Constant(value='/api/evaluation-errors/{job_id}')], keywords=[])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:evaluations": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='job_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='get', ctx=Load()), args=[Constant(value='/api/evaluations/{job_id}')], keywords=[])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:execute_worker": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='job_id'), arg(arg='model_id'), arg(arg='text'), arg(arg='reference_path'), arg(arg='reference_text'), arg(arg='language')], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='German')])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/backend.py:experiments": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='limit', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=30)])",
+    "async": false,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='get', ctx=Load()), args=[Constant(value='/api/experiments')], keywords=[])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:export_batch": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='batch_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='get', ctx=Load()), args=[Constant(value='/api/exports/{batch_id}')], keywords=[])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:generate": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='request', annotation=Name(id='GenerateRequest', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": true,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='post', ctx=Load()), args=[Constant(value='/api/generations')], keywords=[keyword(arg='status_code', value=Constant(value=202))])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:get_evaluator": {
+    "arguments": "arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/backend.py:get_installed_reference": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='filename', annotation=Name(id='str', ctx=Load())), arg(arg='text_filename', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/backend.py:get_reference_profile": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='language', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='German')])",
+    "async": false,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='get', ctx=Load()), args=[Constant(value='/api/reference-profile')], keywords=[])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:health": {
+    "arguments": "arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='get', ctx=Load()), args=[Constant(value='/api/health')], keywords=[])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:install_backend_reference": {
+    "arguments": "arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/backend.py:lifespan": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='app')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": true,
+    "decorators": [
+      "Name(id='asynccontextmanager', ctx=Load())"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:load_backend_reference": {
+    "arguments": "arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/backend.py:login": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='body', annotation=Name(id='Login', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='post', ctx=Load()), args=[Constant(value='/api/session')], keywords=[])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:logout": {
+    "arguments": "arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='delete', ctx=Load()), args=[Constant(value='/api/session')], keywords=[])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:models": {
+    "arguments": "arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='get', ctx=Load()), args=[Constant(value='/api/models')], keywords=[])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:protect_api": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='request', annotation=Name(id='Request', ctx=Load())), arg(arg='call_next')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": true,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='middleware', ctx=Load()), args=[Constant(value='http')], keywords=[])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:ratings": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='job_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='get', ctx=Load()), args=[Constant(value='/api/ratings/{job_id}')], keywords=[])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:recording": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='job_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='get', ctx=Load()), args=[Constant(value='/api/recordings/{job_id}/audio')], keywords=[])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:reference_audio": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='reference_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='get', ctx=Load()), args=[Constant(value='/api/references/{reference_id}/audio')], keywords=[])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:reload_backend_reference": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='authorization', annotation=BinOp(left=Name(id='str', ctx=Load()), op=BitOr(), right=Constant(value=None)))], kwonlyargs=[], kw_defaults=[], defaults=[Call(func=Name(id='Header', ctx=Load()), args=[Constant(value=None)], keywords=[])])",
+    "async": false,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='post', ctx=Load()), args=[Constant(value='/api/admin/reload-reference')], keywords=[])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:run_job": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='job_id'), arg(arg='model'), arg(arg='text'), arg(arg='path'), arg(arg='reference_text'), arg(arg='language')], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='German')])",
+    "async": true,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/backend.py:save_workspace": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='body', annotation=Name(id='LayoutRequest', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='patch', ctx=Load()), args=[Constant(value='/api/workspace')], keywords=[])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:schedule_evaluation": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='job_id', annotation=Name(id='str', ctx=Load())), arg(arg='force', annotation=Name(id='bool', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=False)])",
+    "async": false,
+    "decorators": [],
+    "returns": "Name(id='str', ctx=Load())"
+  },
+  "backend/backend.py:start_evaluation": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='job_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": true,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='post', ctx=Load()), args=[Constant(value='/api/evaluations/{job_id}')], keywords=[keyword(arg='status_code', value=Constant(value=202))])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:update_job": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='job_id'), arg(arg='status'), arg(arg='output'), arg(arg='error'), arg(arg='runtime_seconds')], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=None), Constant(value=None)])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/backend.py:upload_reference": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='file', annotation=Name(id='UploadFile', ctx=Load())), arg(arg='transcript', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Call(func=Name(id='File', ctx=Load()), args=[Constant(value=Ellipsis)], keywords=[]), Call(func=Name(id='Form', ctx=Load()), args=[Constant(value='')], keywords=[])])",
+    "async": true,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='post', ctx=Load()), args=[Constant(value='/api/references/upload')], keywords=[])"
+    ],
+    "returns": null
+  },
+  "backend/backend.py:workspace": {
+    "arguments": "arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [
+      "Call(func=Attribute(value=Name(id='app', ctx=Load()), attr='get', ctx=Load()), args=[Constant(value='/api/workspace')], keywords=[])"
+    ],
+    "returns": null
+  },
+  "backend/evaluator.py:Evaluator": {
+    "fields": [],
+    "methods": {
+      "evaluate": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='output', annotation=Name(id='str', ctx=Load())), arg(arg='reference', annotation=Name(id='str', ctx=Load())), arg(arg='text', annotation=Name(id='str', ctx=Load())), arg(arg='elapsed', annotation=Name(id='float', ctx=Load())), arg(arg='ttft_ms', annotation=BinOp(left=Name(id='float', ctx=Load()), op=BitOr(), right=Constant(value=None)))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])"
+    }
+  },
+  "backend/models/__init__.py:assemble_speech_waveform": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='chunks', annotation=Name(id='list', ctx=Load())), arg(arg='target_samples'), arg(arg='rate', annotation=Name(id='int', ctx=Load())), arg(arg='texts', annotation=BinOp(left=Subscript(value=Name(id='list', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load()), op=BitOr(), right=Constant(value=None))), arg(arg='pauses_ms', annotation=BinOp(left=Subscript(value=Name(id='list', ctx=Load()), slice=Name(id='float', ctx=Load()), ctx=Load()), op=BitOr(), right=Constant(value=None))), arg(arg='speech_rate', annotation=Name(id='float', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=24000), Constant(value=None), Constant(value=None), Constant(value=1.0)])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/models/__init__.py:cap_long_pauses": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='samples'), arg(arg='rate', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/models/__init__.py:generate_audio": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='model_id', annotation=Name(id='str', ctx=Load())), arg(arg='text', annotation=Name(id='str', ctx=Load())), arg(arg='reference', annotation=Name(id='Path', ctx=Load())), arg(arg='transcript', annotation=Name(id='str', ctx=Load())), arg(arg='output', annotation=Name(id='Path', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": "Constant(value=None)"
+  },
+  "backend/models/__init__.py:generation_language": {
+    "arguments": "arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": "Name(id='str', ctx=Load())"
+  },
+  "backend/models/__init__.py:get_engine": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='model_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/models/__init__.py:get_timing": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='path', annotation=BinOp(left=Name(id='str', ctx=Load()), op=BitOr(), right=Name(id='Path', ctx=Load()))), arg(arg='key', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": "BinOp(left=Name(id='float', ctx=Load()), op=BitOr(), right=Constant(value=None))"
+  },
+  "backend/models/__init__.py:mark_first_audio": {
+    "arguments": "arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": "Constant(value=None)"
+  },
+  "backend/models/__init__.py:model_availability": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='model_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": "Name(id='dict', ctx=Load())"
+  },
+  "backend/models/__init__.py:preload_all_models": {
+    "arguments": "arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": "Constant(value=None)"
+  },
+  "backend/models/__init__.py:record_timing": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='path', annotation=BinOp(left=Name(id='str', ctx=Load()), op=BitOr(), right=Name(id='Path', ctx=Load()))), arg(arg='key', annotation=Name(id='str', ctx=Load())), arg(arg='value', annotation=Name(id='float', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": "Constant(value=None)"
+  },
+  "backend/models/__init__.py:select_device": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='env_var', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value='MODEL_DEVICE')])",
+    "async": false,
+    "decorators": [],
+    "returns": "Name(id='str', ctx=Load())"
+  },
+  "backend/models/__init__.py:split_speech_sentences": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='text', annotation=Name(id='str', ctx=Load())), arg(arg='max_chars', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=220)])",
+    "async": false,
+    "decorators": [],
+    "returns": "Subscript(value=Name(id='list', ctx=Load()), slice=Name(id='str', ctx=Load()), ctx=Load())"
+  },
+  "backend/models/__init__.py:trim_speech_silence": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='chunk'), arg(arg='rate', annotation=Name(id='int', ctx=Load())), arg(arg='thresh', annotation=Name(id='float', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=24000), Constant(value=0.001)])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/models/cosyvoice3/model.py:load": {
+    "arguments": "arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/models/cosyvoice3/model.py:synthesize": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='text', annotation=Name(id='str', ctx=Load())), arg(arg='reference', annotation=Name(id='Path', ctx=Load())), arg(arg='transcript', annotation=Name(id='str', ctx=Load())), arg(arg='target_samples', annotation=BinOp(left=Name(id='int', ctx=Load()), op=BitOr(), right=Constant(value=None)))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/models/pacing.py:SpeechChunk": {
+    "fields": [
+      "AnnAssign(target=Name(id='text', ctx=Store()), annotation=Name(id='str', ctx=Load()), simple=1)",
+      "AnnAssign(target=Name(id='pause_after_ms', ctx=Store()), annotation=Name(id='float', ctx=Load()), simple=1)"
+    ],
+    "methods": {}
+  },
+  "backend/models/pacing.py:get_speech_rate": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='model_id', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": "Name(id='float', ctx=Load())"
+  },
+  "backend/models/pacing.py:plan_speech": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='text', annotation=Name(id='str', ctx=Load())), arg(arg='max_chars', annotation=Name(id='int', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=220)])",
+    "async": false,
+    "decorators": [],
+    "returns": "Subscript(value=Name(id='list', ctx=Load()), slice=Name(id='SpeechChunk', ctx=Load()), ctx=Load())"
+  },
+  "backend/models/pacing.py:slow_speech": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='samples'), arg(arg='rate', annotation=Name(id='float', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/models/qwen3/model.py:load": {
+    "arguments": "arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/models/qwen3/model.py:synthesize": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='text', annotation=Name(id='str', ctx=Load())), arg(arg='reference', annotation=Name(id='Path', ctx=Load())), arg(arg='transcript', annotation=Name(id='str', ctx=Load())), arg(arg='target_samples', annotation=BinOp(left=Name(id='int', ctx=Load()), op=BitOr(), right=Constant(value=None)))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/models/xtts_v2/model.py:load": {
+    "arguments": "arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  },
+  "backend/models/xtts_v2/model.py:synthesize": {
+    "arguments": "arguments(posonlyargs=[], args=[arg(arg='text', annotation=Name(id='str', ctx=Load())), arg(arg='reference', annotation=Name(id='Path', ctx=Load())), arg(arg='transcript', annotation=Name(id='str', ctx=Load())), arg(arg='target_samples', annotation=BinOp(left=Name(id='int', ctx=Load()), op=BitOr(), right=Constant(value=None)))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
+    "async": false,
+    "decorators": [],
+    "returns": null
+  }
+}

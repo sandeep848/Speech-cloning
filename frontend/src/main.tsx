@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
 
-const API = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+import { API, req, post } from './api/client';
+import { AudioPlayer } from './components/AudioPlayer';
 
 interface Model {
   id: string;
@@ -227,28 +228,6 @@ const PRESET_SCRIPTS_EN = [
   },
 ];
 
-async function req(path: string, options: RequestInit = {}) {
-  const response = await fetch(API + path, { ...options, credentials: 'include' });
-  const body = await response.json().catch(() => ({ detail: response.statusText }));
-  if (!response.ok) {
-    if (response.status === 401 && path !== '/api/session') {
-      window.dispatchEvent(new Event('studio-login'));
-    }
-    const error = new Error(
-      typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)
-    ) as Error & { status: number };
-    error.status = response.status;
-    throw error;
-  }
-  return body;
-}
-
-const post = (path: string, body: unknown) =>
-  req(path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
 
 function savedActive(): string[] {
   try {
@@ -274,14 +253,6 @@ interface ReferenceInfo {
   channels?: number;
 }
 
-function AudioPlayer({ path, title }: { path: string; title?: string }) {
-  return (
-    <div className="audio-player-box">
-      {title && <span className="audio-player-label">{title}</span>}
-      <audio controls preload="metadata" crossOrigin="use-credentials" src={API + path} />
-    </div>
-  );
-}
 
 function App() {
   const [tab, setTab] = useState<'Compare' | 'Metrics' | 'Evaluation'>('Compare');
