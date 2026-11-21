@@ -11,6 +11,8 @@ backend_dir = Path(__file__).resolve().parents[1]
 project_root = Path(__file__).resolve().parents[2]
 os.environ["VOICE_STUDIO_DATA"] = tempfile.mkdtemp(prefix="studio-test-")
 os.environ["PRELOAD_MODELS"] = "0"
+os.environ["STUDIO_ENV"] = "development"
+os.environ["ALLOW_INSECURE_LOCAL"] = "1"
 os.environ["REFERENCE_DIR"] = tempfile.mkdtemp(prefix="studio-reference-")
 with wave.open(str(Path(os.environ["REFERENCE_DIR"]) / "reference.wav"), "wb") as sample:
     sample.setnchannels(1)

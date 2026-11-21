@@ -30,7 +30,11 @@ load_dotenv(Path(__file__).parent / ".env", override=False)
 
 import direct_inference
 from app.db.connection import connect
-from app.security.session import authenticated, session_signature
+from app.security.session import authenticated, session_signature, create_session, revoke_session
+from app.config import validate_environment
+from app.security.rate_limit import RateLimiter
+from app.services.audio import validate_pcm, atomic_write
+from app.repositories import jobs as job_repository
 
 ROOT = Path(
     os.environ.get("VOICE_STUDIO_DATA", Path(__file__).parent / "data")
@@ -82,17 +86,18 @@ def _startup_preload():
 
 @asynccontextmanager
 async def lifespan(app):
-    if os.getenv("STUDIO_ENV") == "production":
-        if len(os.getenv("API_TOKEN", "")) < 32:
-            raise RuntimeError("Production requires an API_TOKEN of at least 32 characters")
-        if os.getenv("COOKIE_SECURE") != "1":
-            raise RuntimeError("Production requires COOKIE_SECURE=1 and HTTPS")
+    validate_environment(ORIGINS)
     load_backend_reference()
+    with db() as c:
+        recoverable = job_repository.recover(c, 3)
+    for row in recoverable:
+        task = asyncio.create_task(run_job(row['id'], row['model'], row['text'], row['path'], row['transcript'], row['language']))
+        TASKS[row['id']] = task
+        task.add_done_callback(lambda _, jid=row['id']: TASKS.pop(jid, None))
     if os.getenv("PRELOAD_MODELS", "1") == "1":
         threading.Thread(target=_startup_preload, daemon=True).start()
     yield
-    for task in list(TASKS.values()):
-        task.cancel()
+    # Drain active inference before releasing its model lock or restarting.
     if TASKS:
         await asyncio.gather(*list(TASKS.values()), return_exceptions=True)
 
@@ -125,6 +130,7 @@ with db() as c:
         existing_columns = {r["name"] for r in c.execute("PRAGMA table_info(jobs)")}
         if column not in existing_columns:
             c.execute(f"ALTER TABLE jobs ADD COLUMN {column} REAL")
+    job_repository.migrate(c)
     c.execute(
         "CREATE TABLE IF NOT EXISTS reference_profiles (id INTEGER PRIMARY KEY CHECK(id=1), reference_id TEXT, transcript TEXT NOT NULL DEFAULT '', updated REAL)"
     )
@@ -204,10 +210,6 @@ def load_backend_reference():
                     )
     install_backend_reference()
     with db() as c:
-        c.execute(
-            "UPDATE jobs SET status='failed',error='Inference interrupted by backend restart',updated=? WHERE status IN ('pending','running')",
-            (time.time(),),
-        )
         c.execute(
             "UPDATE evaluation_runs SET status='interrupted',error='Evaluation interrupted by backend restart',updated=? WHERE status IN ('pending','running')",
             (time.time(),),
@@ -360,16 +362,13 @@ async def upload_reference(
     if len(content) < 44:
         raise HTTPException(400, "Invalid WAV file")
     try:
-        with wave.open(io.BytesIO(content), "rb") as reader:
-            duration = reader.getnframes() / reader.getframerate()
-            if duration < 0.25 or duration > 120:
-                raise ValueError("Reference WAV must be 0.25-120 seconds long")
+        validate_pcm(content)
     except (wave.Error, ValueError, EOFError, ZeroDivisionError):
         raise HTTPException(400, "Invalid PCM WAV file")
 
     REFERENCE_DIR.mkdir(parents=True, exist_ok=True)
-    REFERENCE_AUDIO.write_bytes(content)
-    REFERENCE_TEXT.write_text(transcript.strip(), encoding="utf-8")
+    atomic_write(REFERENCE_AUDIO, content)
+    atomic_write(REFERENCE_TEXT, transcript.strip().encode("utf-8"))
 
     install_backend_reference()
     return get_reference_profile()
@@ -407,23 +406,28 @@ def execute_worker(
     job_id, model_id, text, reference_path, reference_text, language="German"
 ):
     output = ROOT / "audio" / f"{job_id}.wav"
+    temporary = output.with_name(f".{job_id}.pending.wav")
     try:
         t0 = time.perf_counter()
         from models import _request_language
         token = _request_language.set(language)
         try:
             direct_inference.generate_audio(
-                model_id, text, Path(reference_path), reference_text, output
+                model_id, text, Path(reference_path), reference_text, temporary
             )
         finally:
             _request_language.reset(token)
         t_elapsed = time.perf_counter() - t0
-        with wave.open(str(output), "rb") as f:
-            if f.getnframes() == 0:
-                raise RuntimeError("Model produced empty WAV")
+        validate_pcm(temporary.read_bytes(), minimum=0.001, maximum=3600)
+        os.replace(temporary, output)
+        from models import get_timing, record_timing
+        for key in ("latency_s", "first_audio_ms"):
+            value = get_timing(temporary, key)
+            if value is not None:
+                record_timing(output, key, value)
         return str(output), t_elapsed
     except Exception:
-        output.unlink(missing_ok=True)
+        temporary.unlink(missing_ok=True)
         raise
 
 
@@ -525,6 +529,8 @@ def auto_evaluate(job_id):
 
 async def run_job(job_id, model, text, path, reference_text, language="German"):
     async with MODEL_LOCKS[model]:
+        with db() as c:
+            c.execute("UPDATE job_inputs SET attempts=attempts+1 WHERE job_id=?", (job_id,))
         update_job(job_id, "running")
         try:
             loop = asyncio.get_running_loop()
@@ -542,7 +548,7 @@ async def run_job(job_id, model, text, path, reference_text, language="German"):
             if os.environ.get("AUTO_EVALUATE", "1") == "1":
                 auto_evaluate(job_id)
         except Exception as exc:
-            err_msg = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+            err_msg = "Inference failed (" + type(exc).__name__ + "); check model configuration"
             update_job(
                 job_id,
                 "failed",
@@ -660,6 +666,8 @@ async def generate(request: GenerateRequest):
                     prior["runtime_seconds"] if out else None,
                 ),
             )
+            if not out:
+                job_repository.save(c, job_id, model, request.text.strip(), ref["path"], effective_transcript, req_lang)
             planned.append((job_id, model, out))
     for job_id, model, out in planned:
         if out and os.environ.get("AUTO_EVALUATE", "1") == "1":
@@ -995,16 +1003,16 @@ def login(body: Login):
     token = os.getenv("API_TOKEN")
     if not token or not hmac.compare_digest(body.token, token):
         raise HTTPException(401, "Invalid access token")
-    stamp = str(int(time.time()))
+    session, ttl = create_session()
     response = JSONResponse({"authenticated": True})
     secure_cookie = os.getenv("COOKIE_SECURE", "0") == "1"
     response.set_cookie(
         "studio_session",
-        stamp + "." + session_signature(stamp),
+        session,
         httponly=True,
         secure=secure_cookie,
         samesite="none" if secure_cookie else "lax",
-        max_age=43200,
+        max_age=ttl,
         path="/",
     )
     return response
@@ -1017,11 +1025,20 @@ def logout():
     return response
 
 
+RATE_LIMITER = RateLimiter()
+
+
 @app.middleware("http")
 async def protect_api(request: Request, call_next):
     if request.method == "OPTIONS":
         return await call_next(request)
     if request.url.path.startswith("/api/"):
+        host = request.client.host if request.client else "unknown"
+        login_request = request.url.path == "/api/session" and request.method == "POST"
+        if login_request or request.method not in ("GET", "HEAD"):
+            limit = 10 if login_request else 120
+            if not RATE_LIMITER.allow((host, "login" if login_request else "write"), limit):
+                return JSONResponse({"detail": "Too many requests"}, status_code=429, headers={"Retry-After": "60"})
         origin = request.headers.get("origin")
         own_origin = str(request.base_url).rstrip("/")
         if (
@@ -1031,10 +1048,17 @@ async def protect_api(request: Request, call_next):
             and origin != own_origin
         ):
             return JSONResponse({"detail": "Origin not allowed"}, status_code=403)
+        if request.url.path == "/api/session" and request.method == "DELETE":
+            revoke_session(request.cookies.get("studio_session", ""))
         public = ("/api/health", "/api/session", "/api/admin/reload-reference")
         if request.url.path not in public and not authenticated(request):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-    return await call_next(request)
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 # Register CORS after authentication so it wraps early 401/403 responses too.
