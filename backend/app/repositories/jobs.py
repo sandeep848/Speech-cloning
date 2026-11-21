@@ -1,5 +1,8 @@
 """Persist private execution inputs before admission; additive SQLite migration."""
 import time
+import wave
+from pathlib import Path
+from app.services.audio import validate_pcm
 
 
 def migrate(connection):
@@ -15,10 +18,20 @@ def save(connection, job_id, model, text, path, transcript, language):
                        (job_id, model, text, path, transcript, language))
 
 
-def recover(connection, max_attempts):
+def recover(connection, max_attempts, audio_directory=None):
     rows = connection.execute("SELECT jobs.id,job_inputs.* FROM jobs LEFT JOIN job_inputs ON jobs.id=job_inputs.job_id WHERE jobs.status IN ('pending','running') ORDER BY jobs.created").fetchall()
     retry = []
     for row in rows:
+        # Publication may have finished immediately before a process crash.
+        output = Path(audio_directory) / (row['id'] + '.wav') if audio_directory else None
+        if output and output.is_file():
+            try:
+                validate_pcm(output.read_bytes(), minimum=0.001, maximum=3600)
+            except (OSError, ValueError, EOFError, wave.Error):
+                pass
+            else:
+                connection.execute("UPDATE jobs SET status='complete',output=?,error=NULL,updated=? WHERE id=?", (str(output), time.time(), row['id']))
+                continue
         if row['job_id'] is not None and row['attempts'] < max_attempts:
             retry.append(row)
             connection.execute("UPDATE jobs SET status='pending',error=NULL,updated=? WHERE id=?", (time.time(), row['id']))

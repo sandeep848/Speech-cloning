@@ -141,3 +141,62 @@ def test_restart_recovery_and_retry_exhaustion(tmp_path):
         assert [r['id'] for r in jobs.recover(c, 3)] == ['resume']
         states = dict(c.execute('SELECT id,status FROM jobs').fetchall())
         assert states == {'resume': 'pending', 'exhausted': 'failed', 'legacy': 'failed'}
+
+
+def test_backup_restore_and_corruption(tmp_path):
+    from app.services.backup import backup, restore
+    source, snapshot, restored = [tmp_path / name for name in ('source', 'snapshot', 'restored')]
+    source.mkdir()
+    audio = source / 'sample.wav'
+    audio.write_bytes(b'synthetic recording')
+    with connect(source / 'studio.sqlite3') as c:
+        c.execute('CREATE TABLE jobs(id TEXT,status TEXT,output TEXT)')
+        c.execute('CREATE TABLE references_audio(id TEXT,path TEXT)')
+        c.execute("INSERT INTO jobs VALUES ('job','complete',?)", (str(audio),))
+        c.execute("INSERT INTO references_audio VALUES ('ref',?)", (str(audio),))
+    backup(source, snapshot)
+    restore(snapshot, restored)
+    with connect(restored / 'studio.sqlite3') as c:
+        output = Path(c.execute('SELECT output FROM jobs').fetchone()[0])
+        assert output == restored / 'audio' / 'sample.wav'
+        assert output.read_bytes() == b'synthetic recording'
+    with pytest.raises(ValueError, match='must not exist'):
+        restore(snapshot, restored)
+    (snapshot / 'audio' / 'sample.wav').write_bytes(b'corruption')
+    with pytest.raises(ValueError, match='checksum'):
+        restore(snapshot, tmp_path / 'corrupt-restore')
+    assert not (tmp_path / 'corrupt-restore').exists()
+
+
+def test_restart_reconciles_published_audio_without_rerunning(tmp_path):
+    import wave
+    from app.repositories import jobs
+    output = tmp_path / 'published.wav'
+    with wave.open(str(output), 'wb') as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(24000)
+        w.writeframes(bytes(4800))
+    with connect(tmp_path / 'restart.sqlite3') as c:
+        c.execute('CREATE TABLE jobs(id TEXT PRIMARY KEY,status TEXT,error TEXT,updated REAL,created REAL,cache_key TEXT,output TEXT)')
+        c.execute("INSERT INTO jobs VALUES ('published','running',NULL,0,0,NULL,NULL)")
+        jobs.migrate(c)
+        assert jobs.recover(c, 3, tmp_path) == []
+        row = c.execute('SELECT status,output FROM jobs').fetchone()
+        assert row['status'] == 'complete'
+        assert Path(row['output']) == output
+
+
+def test_streamed_body_limit_without_content_length():
+    from fastapi import FastAPI, Request
+    from fastapi.testclient import TestClient
+    from app.security.body_limit import BodyLimitMiddleware
+    app = FastAPI()
+    @app.post('/')
+    async def consume(request: Request):
+        return {'bytes': len(await request.body())}
+    app.add_middleware(BodyLimitMiddleware, maximum=4)
+    with TestClient(app) as api:
+        assert api.post('/', content=b'abcd').status_code == 200
+        assert api.post('/', content=iter([b'abc', b'def'])).status_code == 413
+        assert api.post('/', content=b'abcde').status_code == 413

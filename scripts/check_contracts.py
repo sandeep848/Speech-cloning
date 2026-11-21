@@ -19,7 +19,17 @@ def snapshot():
     result = {}
     for path in FILES:
         tree = ast.parse((ROOT / path).read_text())
+        nodes = []
         for node in tree.body:
+            # Resolve compatibility re-exports so moving a schema does not remove
+            # its existing contract or hide later field changes from this gate.
+            if isinstance(node, ast.ImportFrom) and node.module == "app.schemas.requests":
+                schema_tree = ast.parse((ROOT / "backend/app/schemas/requests.py").read_text())
+                names = {alias.name for alias in node.names}
+                nodes.extend(item for item in schema_tree.body if isinstance(item, ast.ClassDef) and item.name in names)
+            else:
+                nodes.append(node)
+        for node in nodes:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not node.name.startswith("_"):
                 result[f"{path}:{node.name}"] = {
                     "arguments": ast.dump(node.args, include_attributes=False),
