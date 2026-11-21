@@ -1,6 +1,6 @@
 export const API = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
-export async function req(path: string, options: RequestInit = {}) {
+export async function req<T = any>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(API + path, { ...options, credentials: 'include' });
   const body = await response.json().catch(() => ({ detail: response.statusText }));
   if (!response.ok) {
