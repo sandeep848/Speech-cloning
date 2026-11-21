@@ -1,33 +1,25 @@
-# Issues and fixes branch: implementation status
+# Implementation status — issues-and-fixes
 
-## Implemented
+Baseline: `a21f846bd3e4ecebd1f6555ab131e8902de0eafa`.
+Protected main recorded before work: `3fc34cba90fa446f59e1a47e7bbf1da238bc2d41`.
 
-- Component workflows for frontend, backend, model/evaluation, security and contracts, coordinated by a final fail-closed status. Triggers include pushes, PRs and merge queues.
-- Existing GitHub Pages deployment now checks the full suite first and only accepts main. Feature branches cannot use it to replace the live site. No deployment performed.
-- Versioned AST compatibility checks for public Python definitions, request classes and route decorators. Behavioral regressions cover concurrency/cache, reference audio, ratings/batches, authentication and evaluation.
-- Initial folder boundary enforcement, CODEOWNERS, PR checklist and weekly dependency-update proposals.
-- Session verification and SQLite transaction management extracted from the API module; connection helper explicitly rolls back failures. Browser transport and audio-player presentation extracted from the React application.
-- 16 MiB bounded WAV reads, bounded reference transcripts, stable validation messages and fail-closed production startup checks for token length/secure cookies.
-- Tests create synthetic reference audio in temporary directories rather than depending on private recordings. Four stale assertions aligned with current native comma prosody, 450 ms paragraph pause and 320 ms legacy join defaults; comma-split batching still tested explicitly.
-- Vite lockfile updated from 6.4.4 to 6.4.6 to address the reported audit finding. No broad dependency-major upgrade.
-- Removed an unused test import and duplicated extracted implementations. Public/re-exported compatibility helpers retained after regression verification.
-- Manual real-model validation workflow for a trusted configured runner; no model audio is uploaded as an artifact.
-
-## Remaining acceptance work from the supplied audit
-
-This branch is an initial compatibility-preserving hardening increment. It does not implement the entire target architecture in the supplied audit and must not be labeled multi-user production-ready.
-
-| Area | Remaining work |
+| Area | Status and evidence |
 | --- | --- |
-| Identity and data isolation | Replace shared token with individual identities and authorization; migrate references, jobs, ratings and exports to explicit owners; test cross-user denial. Current records are shared among authenticated token holders. |
-| Database | PostgreSQL deployment, versioned migrations, constraints, upgrade/downgrade and restore tests. Current database remains SQLite. |
-| Durable workers | Queue-backed API/worker separation, worker leases, retry/idempotency and restart recovery. Existing restart behavior marks interrupted jobs failed rather than resuming them. Keep one API worker. |
-| Full modularization | Extract remaining routing, service, evaluation and application state in tested increments. main.tsx/backend.py remain substantial. |
-| API schemas | Versioned response schemas, OpenAPI-derived TypeScript and broader consumer contracts. Existing JSON response behavior is only partly covered by tests. |
-| Security | Per-user credentials/session revocation, rate limiting, broader threat testing, full model-runtime dependency lock/audit and review of medium/low static findings. CI audits test/API dependency resolution, not the whole ML runtime. |
-| Observability | Structured runtime request/job tracing, protected administrative audit storage, metrics, alerting and retention. CI build provenance is implemented; runtime observability remains limited. |
-| Release infrastructure | Immutable full-stack container build, staging target, tested database backups, production promotion, rollback and monitored rollout. Existing CD only serves the frontend on Pages. |
-| Models/research | Execute the real-model workflow on supported hardware; validate all evaluation dependencies and listener calibration. Mocked tests do not prove real model compatibility or voice quality. |
-| Governance | Admin must activate branch rules and environment reviewers, provision trusted model runner and choose collaborator owners. Configuration files cannot enforce these account settings by themselves. |
+| Authentication | Implemented/tested: missing configuration fails closed; explicit loopback development; revocable persistent sessions; expiry, token rotation and replay regressions |
+| API boundaries | Implemented/tested: write/login rate limits, streamed body and PCM validation; safe inference/evaluation errors; CORS and existing session behavior preserved |
+| Job reliability | Implemented/tested: private persisted inputs, bounded admission, atomic output, idempotency, bounded transient retries, restart reconciliation, retry exhaustion and pending cancellation |
+| Database/storage | SQLite retained; additive version record/indexes; rollback helper retained; offline backup, checksums, restore relocation and corruption rejection tested |
+| Backend organization | Config, schemas, security, job repository and audio/backup services extracted; compatibility entry points retained. Most HTTP routes and orchestration still remain in backend.py |
+| Frontend organization | Bootstrap, App, error boundary, shared types, presets and metric definitions separated; polling is sequential and aborts on cleanup; TypeScript/build pass. Broader feature/component extraction remains |
+| CI/release | Integration component included in fail-closed final coordinator; runtime SBOM/audit and actual model/metric smoke checks wired into manual deployment prerequisites. Hosted execution not yet verified |
+| Observability | Structured accepted-request and inference failure logs, request IDs, health and protected loaded-model readiness implemented; external monitoring/alerts remain |
+| Real models/metrics | Lightweight regressions pass. Actual three-model inference, complete runtime compatibility, metric validity and performance remain blocked by missing approved runtime/weights/reference data |
+| Multi-user isolation | Not implemented; shared-token holders share the workspace. Independent identities and per-resource ownership migration remain required for untrusted multi-user service |
+| Staging/production | Configuration validation/templates and offline recovery tooling implemented. No staging host provisioned, no live rollout or rollback rehearsal, no production deployment performed |
+| Research quality | Smoke/benchmark tools retained and extended. Approved checkpoint/baseline manifests, calibrated listening and quality regressions remain unverified |
+| Coverage | Measured local results are in VERIFICATION.md; the non-test backend coverage target is not met |
+| Governance | Existing CODEOWNERS, compatibility checks and Dependabot retained. Required branch checks/environment reviewers need repository administration; no administrative mutation tool is available |
 
-No change to main and no production rollout are part of this implementation. Never infer deployment readiness solely from green CPU checks.
+No Celery, Redis, distributed job brokers, separate model services, PostgreSQL migration, Kubernetes or additional permanent branch was introduced. The previous recommendations for separate workers and unnecessary database migration have been removed.
+
+Release assessment: useful hardening and modularization, **not accepted as production-ready**. Remaining blockers are real inference/evaluation evidence, full runtime dependency/security results, hosted CI/browser verification, further modularization, ownership if multi-user access is needed, and deployed staging/restore/rollback/monitoring validation.

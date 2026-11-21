@@ -21,10 +21,12 @@ jobs:
     uses: ./.github/workflows/contracts.yml
   security:
     uses: ./.github/workflows/security.yml
+  integration:
+    uses: ./.github/workflows/integration.yml
   final-check:
     name: Final checks
     if: always()
-    needs: [backend, frontend, models, contracts, security]
+    needs: [backend, frontend, models, contracts, security, integration]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

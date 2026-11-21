@@ -1,0 +1,17 @@
+# Security and deployment boundary
+
+This is a shared trusted research workspace. Every API-token holder can access the same references, generated audio, ratings and exports. Session revocation does not create individual users. Do not use it for mutually untrusted tenants: individual identities, ownership migration and cross-user authorization tests remain unimplemented.
+
+Missing API_TOKEN fails startup by default and denies protected requests. Explicit `STUDIO_ENV=development` plus `ALLOW_INSECURE_LOCAL=1` permits requests from loopback clients only. Bind that mode to 127.0.0.1 and do not put it behind a public proxy. Staging and production require a token of at least 32 characters, secure cookies, explicit HTTPS CORS origins and no insecure development override. WEB_CONCURRENCY must be 1. Configure Uvicorn with one application process; this variable alone cannot detect every alternate process launcher.
+
+Cookies contain random opaque session values. Only hashes and token-keyed signatures are persisted in SQLite. Sessions expire after SESSION_TTL_SECONDS (60–604800; default 43200), survive application restarts, are invalidated server-side on logout, and become invalid when API_TOKEN is rotated. The shared token is a bearer credential, not a user password. There is no password database or claim of password-based authentication.
+
+Non-read API requests validate browser Origin against configured frontend origins and the request origin. Secure cross-site cookies use HttpOnly, Secure and SameSite=None. Deploy behind a trusted TLS proxy; trust forwarded headers only from that proxy. Prefer same-site frontend/backend hosting where browsers block third-party cookies. Bearer clients must still protect their credentials.
+
+Login is limited to 10 attempts per minute per client address; other writes to 120 per minute. Limits are process-local, reset on restart, bound memory to 4096 live buckets, and do not read user-provided forwarding headers directly. Configure the reverse proxy's connection/body/time limits as an additional boundary. Rate limiting is not a distributed abuse-prevention system.
+
+A 17 MiB streamed total-body limit protects multipart spooling. WAV content is separately limited to 16 MiB, duration 0.25–120 seconds, supported PCM format, and full frame payload. Inference validates output before atomic rename. Audio and transcripts remain private; generated filenames are server controlled. Inference/evaluation errors returned to clients use sanitized messages. Some legacy model-availability details and frontend metric heuristics still need review.
+
+Request logs include random request ID, status, duration and application version. Inference failure logs include job/model IDs and exception class, without exception text. Do not enable HTTP body/cookie/token logging at the proxy. Responses use no-store on successful API paths, nosniff and no-referrer headers. Early rejected responses do not yet receive all of these application headers; CORS still wraps them.
+
+Security CI runs dependency auditing, SBOM generation, Bandit and history secrets scanning. The model release workflow audits the complete installed inference environment. A clean API/test dependency audit does not establish that the ML environment is vulnerability-free. Three medium Bandit findings remain for unpinned model downloads, plus four low findings in model setup; see AUDIT_CURRENT.md. No full local history secrets scan was available in this environment.

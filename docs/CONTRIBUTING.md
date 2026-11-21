@@ -45,3 +45,10 @@ CODEOWNERS and workflows alone do not restrict pushes. A repository administrato
 Protect `.github/`, `scripts/`, contract baselines, security, database and deployment files with owner review. Currently the owner is @sandeep848 for every directory; add actual collaborators as they join. A single owner cannot independently approve their own PR; add another maintainer if code-owner review is mandatory.
 
 Use Git commits and PRs as the author/reviewer/timestamp audit trail. Actions preserves test artifacts and per-commit provenance. These are subject to GitHub retention and administrator access, not an immutable compliance audit system. Never commit credentials or user audio.
+
+
+## Current integration rules
+
+Work on issues-and-fixes; preserve main and history. Use small descriptive commits such as `fix(security): reject missing token configuration` or `refactor(frontend): extract generation components`. Changes should explain behavior and verification. Do not add attribution trailers. Keep model execution in the one backend and one environment; do not introduce separate model services or brokers. Public compatibility imports and HTTP contracts must remain usable during extraction. Contract checks resolve request-schema re-exports and must still catch field changes. Internal refactoring is allowed with behavioral tests.
+
+CI changes, security modules and contract baselines require the existing code-owner review. Required review and branch protection must be enabled by a repository administrator; CODEOWNERS alone does not enforce them. No production deployment is authorized by routine branch pushes.

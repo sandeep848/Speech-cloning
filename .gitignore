@@ -20,3 +20,10 @@ backend/models/cosyvoice3/repo
 backend/models/evaluators/whisper/
 backend/models/evaluators/ecapa/
 backend/models/evaluators/scoreq/
+
+.coverage
+coverage.json
+reports/
+model-smoke.json
+runtime-sbom.json
+api-sbom.json

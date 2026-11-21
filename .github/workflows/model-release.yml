@@ -1,6 +1,7 @@
 name: Real model release validation
 on:
   workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 jobs:
@@ -16,8 +17,17 @@ jobs:
           SMOKE_REFERENCE_AUDIO: ${{ vars.SMOKE_REFERENCE_AUDIO }}
           SMOKE_REFERENCE_TEXT: ${{ vars.SMOKE_REFERENCE_TEXT }}
           MODEL_DEVICE: cuda:0
-        run: python scripts/model_smoke.py > model-smoke.json
+          ENABLE_WHISPER: '1'
+          ENABLE_ECAPA: '1'
+          ENABLE_SCOREQ: '1'
+          ENABLE_DNSMOS: '1'
+        run: python scripts/model_smoke.py --report model-smoke.json
+      - name: Audit complete installed inference runtime and generate SBOM
+        run: python -m pip_audit --format cyclonedx-json --output runtime-sbom.json
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: real-models-${{ github.sha }}
-          path: model-smoke.json
+          path: |
+            model-smoke.json
+            runtime-sbom.json

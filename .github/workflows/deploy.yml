@@ -10,8 +10,11 @@ jobs:
   verify:
     if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/ci.yml
-  build:
+  real-models:
     needs: verify
+    uses: ./.github/workflows/model-release.yml
+  build:
+    needs: [verify, real-models]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
