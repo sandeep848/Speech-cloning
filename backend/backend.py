@@ -10,14 +10,15 @@ import json
 import math
 import os
 import shutil
-import sqlite3
 import threading
 import time
 import uuid
 import wave
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
+import logging
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -25,11 +26,18 @@ from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadF
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from app.schemas.requests import GenerateRequest, BatchRequest, RatingRequest, LayoutRequest, Login
 
 load_dotenv(Path(__file__).parent / ".env", override=False)
 
 import direct_inference
+from app.db.connection import connect
+from app.security.session import authenticated, session_signature, create_session, revoke_session
+from app.config import validate_environment
+from app.security.rate_limit import RateLimiter
+from app.security.body_limit import BodyLimitMiddleware
+from app.services.audio import validate_pcm, atomic_write
+from app.repositories import jobs as job_repository
 
 ROOT = Path(
     os.environ.get("VOICE_STUDIO_DATA", Path(__file__).parent / "data")
@@ -52,6 +60,9 @@ EVAL_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="evaluation")
 MODEL_LOCKS = {model: asyncio.Lock() for model in MODEL_IDS}
 MAX_PENDING = int(os.getenv("MAX_PENDING_JOBS", "12"))
 TASKS: dict[str, asyncio.Task] = {}
+GENERATION_ADMISSION = asyncio.Lock()
+IDEMPOTENCY_KEY = ContextVar("idempotency_key", default=None)
+logger = logging.getLogger("voice_studio")
 
 _evaluator = None
 _evaluator_lock = threading.Lock()
@@ -81,12 +92,18 @@ def _startup_preload():
 
 @asynccontextmanager
 async def lifespan(app):
+    validate_environment(ORIGINS)
     load_backend_reference()
+    with db() as c:
+        recoverable = job_repository.recover(c, 3, ROOT / "audio")
+    for row in recoverable:
+        task = asyncio.create_task(run_job(row['id'], row['model'], row['text'], row['path'], row['transcript'], row['language']))
+        TASKS[row['id']] = task
+        task.add_done_callback(lambda _, jid=row['id']: TASKS.pop(jid, None))
     if os.getenv("PRELOAD_MODELS", "1") == "1":
         threading.Thread(target=_startup_preload, daemon=True).start()
     yield
-    for task in list(TASKS.values()):
-        task.cancel()
+    # Drain active inference before releasing its model lock or restarting.
     if TASKS:
         await asyncio.gather(*list(TASKS.values()), return_exceptions=True)
 
@@ -95,15 +112,8 @@ app = FastAPI(title="Voice Comparison Studio", version="1.0.0", lifespan=lifespa
 
 
 
-@contextmanager
 def db():
-    connection = sqlite3.connect(DB, timeout=30)
-    connection.row_factory = sqlite3.Row
-    try:
-        yield connection
-        connection.commit()
-    finally:
-        connection.close()
+    return connect(DB)
 
 
 with db() as c:
@@ -126,6 +136,8 @@ with db() as c:
         existing_columns = {r["name"] for r in c.execute("PRAGMA table_info(jobs)")}
         if column not in existing_columns:
             c.execute(f"ALTER TABLE jobs ADD COLUMN {column} REAL")
+    job_repository.migrate(c)
+    c.execute("CREATE TABLE IF NOT EXISTS generation_requests (key TEXT PRIMARY KEY, fingerprint TEXT, response TEXT)")
     c.execute(
         "CREATE TABLE IF NOT EXISTS reference_profiles (id INTEGER PRIMARY KEY CHECK(id=1), reference_id TEXT, transcript TEXT NOT NULL DEFAULT '', updated REAL)"
     )
@@ -193,22 +205,19 @@ def install_backend_reference():
 
 def load_backend_reference():
     with db() as c:
-        for table, column in (("references_audio", "path"), ("jobs", "output")):
-            for row in c.execute(
-                f"SELECT id,{column} AS path FROM {table} WHERE {column} IS NOT NULL"
-            ).fetchall():
+        for select_query, update_query in (
+            ("SELECT id,path FROM references_audio WHERE path IS NOT NULL", "UPDATE references_audio SET path=? WHERE id=?"),
+            ("SELECT id,output AS path FROM jobs WHERE output IS NOT NULL", "UPDATE jobs SET output=? WHERE id=?"),
+        ):
+            for row in c.execute(select_query).fetchall():
                 relocated = ROOT / "audio" / Path(row["path"]).name
                 if not Path(row["path"]).is_file() and relocated.is_file():
                     c.execute(
-                        f"UPDATE {table} SET {column}=? WHERE id=?",
+                        update_query,
                         (str(relocated), row["id"]),
                     )
     install_backend_reference()
     with db() as c:
-        c.execute(
-            "UPDATE jobs SET status='failed',error='Inference interrupted by backend restart',updated=? WHERE status IN ('pending','running')",
-            (time.time(),),
-        )
         c.execute(
             "UPDATE evaluation_runs SET status='interrupted',error='Evaluation interrupted by backend restart',updated=? WHERE status IN ('pending','running')",
             (time.time(),),
@@ -223,34 +232,6 @@ def reload_backend_reference(authorization: str | None = Header(None)):
     return {"loaded": install_backend_reference()}
 
 
-class GenerateRequest(BaseModel):
-    use_cache: bool = True
-    text: str = Field(min_length=1, max_length=2000)
-    reference_id: str | None = None
-    models: list[str] = Field(min_length=1, max_length=3)
-    reference_text: str = Field(default="", max_length=4000)
-    language: str = "German"
-
-
-class BatchRequest(BaseModel):
-    reference_id: str
-    models: list[str] = Field(min_length=1, max_length=3)
-    texts: list[str] = Field(min_length=1, max_length=100)
-    repetitions: int = Field(default=1, ge=1, le=20)
-    reference_text: str = ""
-
-
-class RatingRequest(BaseModel):
-    job_id: str
-    rater: str = Field(default="Evaluator", min_length=1, max_length=100)
-    category: str = Field(pattern="^(naturalness|similarity|intelligibility)$")
-    rating: int = Field(ge=1, le=5)
-
-
-class LayoutRequest(BaseModel):
-    active: list[str]
-
-
 @app.get("/api/health")
 def health():
     return {
@@ -259,6 +240,15 @@ def health():
         "execution": "parallel",
         "reference_configured": REFERENCE_AUDIO.is_file(),
     }
+
+
+@app.get("/api/ready")
+def readiness():
+    with db() as c:
+        c.execute("SELECT 1").fetchone()
+    loaded = {model: bool(direct_inference.model_availability(model).get("loaded")) for model in MODEL_IDS}
+    ready = all(loaded.values()) and os.access(ROOT / "audio", os.W_OK)
+    return JSONResponse({"status": "ready" if ready else "not_ready", "models_loaded": loaded}, status_code=200 if ready else 503)
 
 
 @app.get("/api/models")
@@ -352,20 +342,22 @@ async def upload_reference(
 ):
     if not file.filename or not file.filename.lower().endswith(".wav"):
         raise HTTPException(400, "Reference must be a .wav file")
-    content = await file.read()
+    # Bound memory even for chunked uploads without a Content-Length header.
+    content = await file.read(16 * 1024 * 1024 + 1)
+    if len(content) > 16 * 1024 * 1024:
+        raise HTTPException(413, "Reference exceeds the 16 MiB limit")
+    if len(transcript) > 4000:
+        raise HTTPException(422, "Reference transcript exceeds 4000 characters")
     if len(content) < 44:
         raise HTTPException(400, "Invalid WAV file")
     try:
-        with wave.open(io.BytesIO(content), "rb") as reader:
-            duration = reader.getnframes() / reader.getframerate()
-            if duration < 0.25 or duration > 120:
-                raise ValueError("Reference WAV must be 0.25-120 seconds long")
-    except Exception as exc:
-        raise HTTPException(400, f"Invalid PCM WAV file: {exc}")
+        validate_pcm(content)
+    except (wave.Error, ValueError, EOFError, ZeroDivisionError):
+        raise HTTPException(400, "Invalid PCM WAV file")
 
     REFERENCE_DIR.mkdir(parents=True, exist_ok=True)
-    REFERENCE_AUDIO.write_bytes(content)
-    REFERENCE_TEXT.write_text(transcript.strip(), encoding="utf-8")
+    atomic_write(REFERENCE_AUDIO, content)
+    atomic_write(REFERENCE_TEXT, transcript.strip().encode("utf-8"))
 
     install_backend_reference()
     return get_reference_profile()
@@ -403,23 +395,28 @@ def execute_worker(
     job_id, model_id, text, reference_path, reference_text, language="German"
 ):
     output = ROOT / "audio" / f"{job_id}.wav"
+    temporary = output.with_name(f".{job_id}.pending.wav")
     try:
         t0 = time.perf_counter()
         from models import _request_language
         token = _request_language.set(language)
         try:
             direct_inference.generate_audio(
-                model_id, text, Path(reference_path), reference_text, output
+                model_id, text, Path(reference_path), reference_text, temporary
             )
         finally:
             _request_language.reset(token)
         t_elapsed = time.perf_counter() - t0
-        with wave.open(str(output), "rb") as f:
-            if f.getnframes() == 0:
-                raise RuntimeError("Model produced empty WAV")
+        validate_pcm(temporary.read_bytes(), minimum=0.001, maximum=3600)
+        os.replace(temporary, output)
+        from models import get_timing, record_timing
+        for key in ("latency_s", "first_audio_ms"):
+            value = get_timing(temporary, key)
+            if value is not None:
+                record_timing(output, key, value)
         return str(output), t_elapsed
     except Exception:
-        output.unlink(missing_ok=True)
+        temporary.unlink(missing_ok=True)
         raise
 
 
@@ -452,6 +449,7 @@ def evaluate_job(job_id: str):
             c.execute("DELETE FROM metrics WHERE job_id=?", (job_id,))
             for name, value, method in metrics:
                 if not math.isfinite(float(value)):
+                    errors[name] = "Evaluator produced a nonfinite value"
                     continue
                 c.execute(
                     "INSERT OR REPLACE INTO metrics VALUES (?,?,?,?)",
@@ -461,7 +459,7 @@ def evaluate_job(job_id: str):
             for name, reason in errors.items():
                 c.execute(
                     "INSERT OR REPLACE INTO evaluation_errors VALUES (?,?,?)",
-                    (job_id, name, str(reason)[:1000]),
+                    (job_id, name, "Metric unavailable; verify evaluator configuration"),
                 )
             c.execute(
                 "UPDATE evaluation_runs SET status=?,error=?,updated=? WHERE job_id=?",
@@ -471,7 +469,7 @@ def evaluate_job(job_id: str):
         with db() as c:
             c.execute(
                 "INSERT INTO evaluation_runs VALUES (?,?,?,?) ON CONFLICT(job_id) DO UPDATE SET status=excluded.status,error=excluded.error,updated=excluded.updated",
-                (job_id, "failed", str(exc)[:1000], time.time()),
+                (job_id, "failed", "Evaluation failed; verify evaluator configuration", time.time()),
             )
     finally:
         with _eval_jobs_lock:
@@ -515,40 +513,54 @@ def auto_evaluate(job_id):
         with db() as c:
             c.execute(
                 "INSERT OR REPLACE INTO evaluation_runs VALUES (?,?,?,?)",
-                (job_id, "failed", str(exc)[:1000], time.time()),
+                (job_id, "failed", "Evaluation failed; verify evaluator configuration", time.time()),
             )
 
 
 async def run_job(job_id, model, text, path, reference_text, language="German"):
     async with MODEL_LOCKS[model]:
-        update_job(job_id, "running")
-        try:
-            loop = asyncio.get_running_loop()
-            output, runtime = await loop.run_in_executor(
-                POOL,
-                execute_worker,
-                job_id,
-                model,
-                text,
-                path,
-                reference_text,
-                language,
-            )
-            update_job(job_id, "complete", output, runtime_seconds=runtime)
-            if os.environ.get("AUTO_EVALUATE", "1") == "1":
-                auto_evaluate(job_id)
-        except Exception as exc:
-            err_msg = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
-            update_job(
-                job_id,
-                "failed",
-                error=err_msg[:2000],
-                runtime_seconds=locals().get("runtime"),
-            )
+        for retry in range(3):
+            with db() as c:
+                row = c.execute("SELECT attempts FROM job_inputs WHERE job_id=?", (job_id,)).fetchone()
+                if row and row['attempts'] >= 3:
+                    update_job(job_id, "failed", error="Inference retry limit reached")
+                    return
+                c.execute("UPDATE job_inputs SET attempts=attempts+1 WHERE job_id=?", (job_id,))
+            update_job(job_id, "running")
+            try:
+                output, runtime = await asyncio.get_running_loop().run_in_executor(
+                    POOL, execute_worker, job_id, model, text, path, reference_text, language)
+                update_job(job_id, "complete", output, runtime_seconds=runtime)
+                if os.environ.get("AUTO_EVALUATE", "1") == "1":
+                    auto_evaluate(job_id)
+                return
+            except Exception as exc:
+                # Invalid input, model imports, OOM and disk-full failures are permanent.
+                if isinstance(exc, (TimeoutError, ConnectionError)) and retry < 2:
+                    await asyncio.sleep(0.25 * (2 ** retry))
+                    continue
+                logger.error(json.dumps({"job_id": job_id, "model_id": model, "status": "failed", "error_code": type(exc).__name__}))
+                update_job(job_id, "failed", error="Inference failed (" + type(exc).__name__ + "); check model configuration")
+                return
 
 
 @app.post("/api/generations", status_code=202)
 async def generate(request: GenerateRequest):
+    key = IDEMPOTENCY_KEY.get()
+    fingerprint = hashlib.sha256(request.model_dump_json().encode()).hexdigest()
+    async with GENERATION_ADMISSION:
+        if key:
+            with db() as c:
+                previous = c.execute("SELECT fingerprint,response FROM generation_requests WHERE key=?", (key,)).fetchone()
+            if previous:
+                if previous['fingerprint'] != fingerprint:
+                    raise HTTPException(409, "Idempotency key already used for another request")
+                return json.loads(previous['response'])
+        result = await _generate(request)
+        return result
+
+
+async def _generate(request: GenerateRequest):
     if not request.text.strip():
         raise HTTPException(422, "Enter a nonempty speech script")
     if len(TASKS) + len(request.models) > MAX_PENDING:
@@ -656,7 +668,16 @@ async def generate(request: GenerateRequest):
                     prior["runtime_seconds"] if out else None,
                 ),
             )
+            if not out:
+                job_repository.save(c, job_id, model, request.text.strip(), ref["path"], effective_transcript, req_lang)
             planned.append((job_id, model, out))
+        response = {"id": batch_id, "jobs": [
+            {"id": j, "model_id": m, "status": "complete" if out else "pending", "cached": bool(out)}
+            for j, m, out in planned]}
+        key = IDEMPOTENCY_KEY.get()
+        if key:
+            fingerprint = hashlib.sha256(request.model_dump_json().encode()).hexdigest()
+            c.execute("INSERT INTO generation_requests VALUES (?,?,?)", (key, fingerprint, json.dumps(response)))
     for job_id, model, out in planned:
         if out and os.environ.get("AUTO_EVALUATE", "1") == "1":
             auto_evaluate(job_id)
@@ -673,18 +694,24 @@ async def generate(request: GenerateRequest):
             )
             TASKS[job_id] = task
             task.add_done_callback(lambda _, jid=job_id: TASKS.pop(jid, None))
-    return {
-        "id": batch_id,
-        "jobs": [
-            {
-                "id": j,
-                "model_id": m,
-                "status": "complete" if out else "pending",
-                "cached": bool(out),
-            }
-            for j, m, out in planned
-        ],
-    }
+    return response
+
+
+@app.post("/api/generations/{batch_id}/cancel")
+async def cancel_generation(batch_id: str):
+    with db() as c:
+        rows = c.execute("SELECT id,status FROM jobs WHERE batch_id=?", (batch_id,)).fetchall()
+        if not rows:
+            raise HTTPException(404, "Unknown generation")
+        cancelled = []
+        for row in rows:
+            if row['status'] == 'pending':
+                task = TASKS.get(row['id'])
+                if task:
+                    task.cancel()
+                c.execute("UPDATE jobs SET status='cancelled',updated=? WHERE id=?", (time.time(), row['id']))
+                cancelled.append(row['id'])
+    return {"cancelled": cancelled, "running": [r['id'] for r in rows if r['status'] == 'running']}
 
 
 @app.get("/api/generations/{batch_id}")
@@ -980,32 +1007,6 @@ def export_batch(batch_id: str):
     )
 
 
-def session_signature(stamp):
-    return hmac.new(
-        os.environ.get("API_TOKEN", "").encode(), stamp.encode(), hashlib.sha256
-    ).hexdigest()
-
-
-def authenticated(request):
-    token = os.getenv("API_TOKEN")
-    if not token:
-        return True
-    if hmac.compare_digest(
-        request.headers.get("authorization", ""), "Bearer " + token
-    ):
-        return True
-    value = request.cookies.get("studio_session", "")
-    try:
-        stamp, signature = value.split(".", 1)
-        return 0 <= time.time() - int(stamp) < 43200 and hmac.compare_digest(
-            signature, session_signature(stamp)
-        )
-    except (ValueError, TypeError):
-        return False
-
-
-class Login(BaseModel):
-    token: str = Field(max_length=1000)
 
 
 @app.post("/api/session")
@@ -1013,16 +1014,16 @@ def login(body: Login):
     token = os.getenv("API_TOKEN")
     if not token or not hmac.compare_digest(body.token, token):
         raise HTTPException(401, "Invalid access token")
-    stamp = str(int(time.time()))
+    session, ttl = create_session()
     response = JSONResponse({"authenticated": True})
     secure_cookie = os.getenv("COOKIE_SECURE", "0") == "1"
     response.set_cookie(
         "studio_session",
-        stamp + "." + session_signature(stamp),
+        session,
         httponly=True,
         secure=secure_cookie,
         samesite="none" if secure_cookie else "lax",
-        max_age=43200,
+        max_age=ttl,
         path="/",
     )
     return response
@@ -1035,11 +1036,24 @@ def logout():
     return response
 
 
+RATE_LIMITER = RateLimiter()
+
+
 @app.middleware("http")
 async def protect_api(request: Request, call_next):
+    key = request.headers.get("idempotency-key") if request.url.path == "/api/generations" else None
+    if key and (len(key) > 128 or not key.isascii() or not key.isprintable()):
+        return JSONResponse({"detail": "Invalid Idempotency-Key"}, status_code=400)
+    IDEMPOTENCY_KEY.set(key)
     if request.method == "OPTIONS":
         return await call_next(request)
     if request.url.path.startswith("/api/"):
+        host = request.client.host if request.client else "unknown"
+        login_request = request.url.path == "/api/session" and request.method == "POST"
+        if login_request or request.method not in ("GET", "HEAD"):
+            limit = 10 if login_request else 120
+            if not RATE_LIMITER.allow((host, "login" if login_request else "write"), limit):
+                return JSONResponse({"detail": "Too many requests"}, status_code=429, headers={"Retry-After": "60"})
         origin = request.headers.get("origin")
         own_origin = str(request.base_url).rstrip("/")
         if (
@@ -1049,10 +1063,28 @@ async def protect_api(request: Request, call_next):
             and origin != own_origin
         ):
             return JSONResponse({"detail": "Origin not allowed"}, status_code=403)
+        if request.url.path == "/api/session" and request.method == "DELETE":
+            revoke_session(request.cookies.get("studio_session", ""))
         public = ("/api/health", "/api/session", "/api/admin/reload-reference")
         if request.url.path not in public and not authenticated(request):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-    return await call_next(request)
+    request_id = uuid.uuid4().hex
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        logger.error(json.dumps({"request_id": request_id, "status": "failed", "error_code": type(exc).__name__}))
+        response = JSONResponse({"detail": "Internal server error", "request_id": request_id}, status_code=500)
+    logger.info(json.dumps({"request_id": request_id, "status": response.status_code, "duration_ms": round((time.perf_counter() - started) * 1000, 2), "version": app.version}))
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+app.add_middleware(BodyLimitMiddleware)
 
 
 # Register CORS after authentication so it wraps early 401/403 responses too.
@@ -1061,7 +1093,7 @@ app.add_middleware(
     allow_origins=ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=["Content-Type", "Authorization", "Idempotency-Key"],
 )
 
 

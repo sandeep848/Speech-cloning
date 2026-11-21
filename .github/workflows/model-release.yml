@@ -1,0 +1,33 @@
+name: Real model release validation
+on:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  real-models:
+    # Never run untrusted pull requests on a persistent self-hosted runner.
+    runs-on: [self-hosted, linux, x64, voice-studio-models]
+    environment: model-validation
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate all three installed models with consented reference audio
+        env:
+          SMOKE_REFERENCE_AUDIO: ${{ vars.SMOKE_REFERENCE_AUDIO }}
+          SMOKE_REFERENCE_TEXT: ${{ vars.SMOKE_REFERENCE_TEXT }}
+          MODEL_DEVICE: cuda:0
+          ENABLE_WHISPER: '1'
+          ENABLE_ECAPA: '1'
+          ENABLE_SCOREQ: '1'
+          ENABLE_DNSMOS: '1'
+        run: python scripts/model_smoke.py --report model-smoke.json
+      - name: Audit complete installed inference runtime and generate SBOM
+        run: python -m pip_audit --format cyclonedx-json --output runtime-sbom.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: real-models-${{ github.sha }}
+          path: |
+            model-smoke.json
+            runtime-sbom.json

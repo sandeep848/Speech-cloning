@@ -20,7 +20,7 @@ def test_distinct_comma_sentence_and_paragraph_pauses():
 def test_paragraph_break_after_unpunctuated_text_is_retained():
     plan = plan_speech('First paragraph\r\n\r\nSecond paragraph')
     assert [c.text for c in plan] == ['First paragraph', 'Second paragraph']
-    assert plan[0].pause_after_ms == 600
+    assert plan[0].pause_after_ms == 450
 
 
 def test_single_wrapped_line_does_not_create_paragraph_pause():
@@ -41,7 +41,7 @@ def test_long_input_is_word_bounded_without_changing_content():
     plan = plan_speech(text)
     assert all(len(c.text) <= 220 for c in plan)
     assert ' '.join(c.text for c in plan) == ' '.join(text.split())
-    assert any(c.pause_after_ms == 600 for c in plan)
+    assert any(c.pause_after_ms == 450 for c in plan)
     with pytest.raises(ValueError):
         plan_speech('x' * 300)
 

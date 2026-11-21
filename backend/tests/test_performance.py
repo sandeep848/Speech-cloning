@@ -41,6 +41,7 @@ def mock_qwen(monkeypatch, device='cuda:0', prompt=True, bad_count=False, differ
 
 def test_qwen_first_phrase_stays_separate_and_remaining_phrases_batch(monkeypatch,tmp_path):
     calls,prompts=mock_qwen(monkeypatch)
+    monkeypatch.setenv('SPLIT_ON_COMMA', '1')
     ref=tmp_path/'reference.wav';ref.touch()
     text='One, two. Three, four. Five.'
     samples,rate=qwen.synthesize(text,ref,'Reference transcript')

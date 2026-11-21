@@ -1,5 +1,4 @@
 import os
-import shutil
 import sys
 import tempfile
 import threading
@@ -12,6 +11,14 @@ backend_dir = Path(__file__).resolve().parents[1]
 project_root = Path(__file__).resolve().parents[2]
 os.environ["VOICE_STUDIO_DATA"] = tempfile.mkdtemp(prefix="studio-test-")
 os.environ["PRELOAD_MODELS"] = "0"
+os.environ["STUDIO_ENV"] = "development"
+os.environ["ALLOW_INSECURE_LOCAL"] = "1"
+os.environ["REFERENCE_DIR"] = tempfile.mkdtemp(prefix="studio-reference-")
+with wave.open(str(Path(os.environ["REFERENCE_DIR"]) / "reference.wav"), "wb") as sample:
+    sample.setnchannels(1)
+    sample.setsampwidth(2)
+    sample.setframerate(24000)
+    sample.writeframes(bytes(48000))
 sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(backend_dir))
 
@@ -314,3 +321,125 @@ def test_local_http_login_cookie_remains_usable(monkeypatch):
         assert "samesite=lax" in cookie
         assert "; secure" not in cookie
         assert api.get("/api/models").status_code == 200
+
+
+def test_upload_is_bounded_and_invalid_audio_is_safe():
+    with TestClient(backend.app) as api:
+        oversized = api.post('/api/references/upload', files={
+            'file': ('large.wav', bytes(16 * 1024 * 1024 + 1), 'audio/wav')})
+        assert oversized.status_code == 413
+        malformed = api.post('/api/references/upload', files={
+            'file': ('bad.wav', bytes(100), 'audio/wav')})
+        assert malformed.status_code == 400
+        assert malformed.json() == {'detail': 'Invalid PCM WAV file'}
+        long_text = api.post('/api/references/upload',
+            data={'transcript': 'x' * 4001},
+            files={'file': ('test.wav', bytes(100), 'audio/wav')})
+        assert long_text.status_code == 422
+
+
+def test_production_rejects_unsafe_configuration(monkeypatch):
+    import pytest
+    monkeypatch.setenv('STUDIO_ENV', 'production')
+    monkeypatch.setenv('API_TOKEN', 'short')
+    with pytest.raises(RuntimeError, match='API_TOKEN'):
+        with TestClient(backend.app):
+            pass
+    monkeypatch.setenv('API_TOKEN', 'x' * 32)
+    monkeypatch.setenv('COOKIE_SECURE', '0')
+    with pytest.raises(RuntimeError, match='COOKIE_SECURE'):
+        with TestClient(backend.app):
+            pass
+
+
+def test_logout_cookie_cannot_be_replayed(monkeypatch):
+    monkeypatch.setenv('API_TOKEN', 'logout-secret')
+    with TestClient(backend.app) as api:
+        assert api.post('/api/session', json={'token': 'logout-secret'}).status_code == 200
+        stolen = api.cookies.get('studio_session')
+        assert api.delete('/api/session').status_code == 200
+        api.cookies.set('studio_session', stolen)
+        assert api.get('/api/models').status_code == 401
+
+
+def test_idempotency_replays_and_rejects_changed_payload(monkeypatch):
+    monkeypatch.setenv('AUTO_EVALUATE', '0')
+    monkeypatch.setattr(direct_inference, 'model_availability', lambda model: {'configured': True})
+    def synthesize(model, text, reference, transcript, output):
+        with wave.open(str(output), 'wb') as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(24000)
+            w.writeframes(bytes(4800))
+    monkeypatch.setattr(direct_inference, 'generate_audio', synthesize)
+    with TestClient(backend.app) as api:
+        headers = {'Idempotency-Key': 'regression-unique-1'}
+        payload = {'text': 'Idempotency regression', 'models': ['qwen3']}
+        first = api.post('/api/generations', json=payload, headers=headers)
+        assert first.status_code == 202
+        replay = api.post('/api/generations', json=payload, headers=headers)
+        assert replay.status_code == 202
+        assert replay.json() == first.json()
+        changed = api.post('/api/generations', json={**payload, 'text': 'different'}, headers=headers)
+        assert changed.status_code == 409
+        with backend.db() as c:
+            assert c.execute('SELECT count(*) FROM batches WHERE id=?', (first.json()['id'],)).fetchone()[0] == 1
+
+
+def test_transient_inference_retries_are_bounded(monkeypatch):
+    monkeypatch.setenv('AUTO_EVALUATE', '0')
+    monkeypatch.setattr(direct_inference, 'model_availability', lambda model: {'configured': True})
+    calls = []
+    def synthesize(*args):
+        calls.append(1)
+        raise TimeoutError('private internal hostname must not be exposed')
+    monkeypatch.setattr(direct_inference, 'generate_audio', synthesize)
+    with TestClient(backend.app) as api:
+        response = api.post('/api/generations', json={'text': 'Transient retry regression', 'models': ['qwen3'], 'use_cache': False})
+        assert response.status_code == 202
+        for _ in range(150):
+            jobs = api.get('/api/generations/' + response.json()['id']).json()['jobs']
+            if jobs[0]['status'] == 'failed':
+                break
+            time.sleep(.02)
+        assert jobs[0]['status'] == 'failed'
+        assert len(calls) == 3
+        assert 'hostname' not in jobs[0]['error']
+        with backend.db() as c:
+            assert c.execute('SELECT attempts FROM job_inputs WHERE job_id=?', (jobs[0]['id'],)).fetchone()[0] == 3
+
+
+def test_pending_cancellation_does_not_interrupt_running_audio(monkeypatch):
+    monkeypatch.setenv('AUTO_EVALUATE', '0')
+    monkeypatch.setattr(direct_inference, 'model_availability', lambda model: {'configured': True})
+    entered, release = threading.Event(), threading.Event()
+    def synthesize(model, text, reference, transcript, output):
+        entered.set()
+        assert release.wait(3)
+        with wave.open(str(output), 'wb') as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(24000)
+            w.writeframes(bytes(4800))
+    monkeypatch.setattr(direct_inference, 'generate_audio', synthesize)
+    with TestClient(backend.app) as api:
+        try:
+            first = api.post('/api/generations', json={'text': 'Running cancellation test', 'models': ['qwen3']}).json()
+            assert entered.wait(2)
+            second = api.post('/api/generations', json={'text': 'Queued cancellation test', 'models': ['qwen3']}).json()
+            result = api.post('/api/generations/' + second['id'] + '/cancel')
+            assert result.status_code == 200
+            assert result.json()['cancelled'] == [second['jobs'][0]['id']]
+            assert api.get('/api/generations/' + second['id']).json()['jobs'][0]['status'] == 'cancelled'
+            running = api.post('/api/generations/' + first['id'] + '/cancel').json()
+            assert running['running'] == [first['jobs'][0]['id']]
+        finally:
+            release.set()
+
+
+def test_readiness_requires_loaded_models_not_only_imports(monkeypatch):
+    with TestClient(backend.app) as api:
+        monkeypatch.setattr(direct_inference, 'model_availability', lambda model: {'configured': True, 'loaded': False})
+        assert api.get('/api/ready').status_code == 503
+        monkeypatch.setattr(direct_inference, 'model_availability', lambda model: {'configured': True, 'loaded': True})
+        assert api.get('/api/ready').status_code == 200

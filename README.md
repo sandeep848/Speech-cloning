@@ -8,6 +8,8 @@ Voice Comparison Studio is a research prototype for comparing **three zero-shot 
 
 It provides a React/TypeScript interface, a Python FastAPI backend, reference-voice handling, text generation, saved WAV outputs, and automated evaluation. The engines use a **single Python runtime** but may execute jobs concurrently. This is an experimental comparison tool, not a claim of production-ready cloning quality or real-time performance.
 
+The `issues-and-fixes` branch uses one backend process, database-backed in-process jobs, explicit authentication configuration and revocable shared-workspace sessions. See [implementation status](docs/IMPLEMENTATION_STATUS.md), [architecture](docs/ARCHITECTURE.md), [security](docs/SECURITY.md), [tests](docs/TESTING.md), [current audit](docs/AUDIT_CURRENT.md) and [deployment/restore commands](docs/DEPLOYMENT.md). Real-model compatibility and production readiness require the outstanding verification in those documents.
+
 > **Research and consent:** Use reference recordings only when you have appropriate permission. Generated speech can contain pronunciation errors, identity drift, or audible synthesis artifacts. Do not present generated speech as a person's authentic recording.
 
 ## Quick start
@@ -19,12 +21,16 @@ Use a dedicated Python environment. **Python 3.12** is used by this project's CI
 ```bash
 git clone https://github.com/sandeep848/Speech-cloning.git
 cd Speech-cloning
+git switch issues-and-fixes
 
 # Example, if conda is available
 conda create -n qwen3 python=3.12 -y
 conda activate qwen3
 
 cp backend/.env.example backend/.env
+# Explicit local-only development; for network use configure API_TOKEN and HTTPS.
+export STUDIO_ENV=development
+export ALLOW_INSECURE_LOCAL=1
 python start.py --no-browser
 ```
 
@@ -241,3 +247,7 @@ Application code, third-party packages, and model checkpoints can have **differe
 - [XTTS-v2 documentation](https://coqui-tts.readthedocs.io/en/latest/models/xtts.html)
 - [Hardware/benchmark profiler guide](SYSTEM_PROFILE.md)
 - [Repository audit notes](AUDIT.md)
+
+## Contributor safeguards
+
+See [contribution rules](docs/CONTRIBUTING.md), [implementation status and remaining acceptance work](docs/IMPLEMENTATION_STATUS.md), and [release validation](docs/DEPLOYMENT.md). Component CI runs on every push; **Final checks** requires every component to succeed. Shared function contracts are versioned under `backend/app/contracts/`.
